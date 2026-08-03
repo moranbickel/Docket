@@ -16,7 +16,7 @@ One plain definition before the precise language starts: throughout this documen
 | UB-NNNN | STATE | title | scope | owner | blocked-by | notes |
 ```
 
-The `UB-` prefix is part of the protocol in v0.1 — the checks parse exactly that shape, and they refuse to report success on a ledger that parses to zero rows (a run over nothing is not a pass). Changing the prefix means changing `checks/_ledger.py` and the phantom check's citation pattern together, deliberately.
+The `UB-` prefix is part of the protocol in v0.1 — the checks parse exactly that shape, and they refuse to report success on rows they cannot read (table lines that parse to zero rows exit loudly; a well-formed table with nothing filed yet is a legitimate empty ledger and passes as one). Changing the prefix is a ONE-site edit, made deliberately: `ID_PREFIX` at the top of `checks/_ledger.py`, from which every check derives its row pattern, its citation pattern, and the pending-marker sentinel. The suite's rename rehearsal (`test_prefix_rename_single_site_is_complete`) is the proof that the instruction is complete.
 
 1.3. Fields:
 

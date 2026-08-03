@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import parse_rows, zero_parse  # noqa: E402
+from _ledger import PENDING_ID, parse_rows, zero_parse  # noqa: E402
 
 TERMINAL = ("DONE", "WONTFIX")
 TOKEN = "reopened:"
@@ -40,8 +40,8 @@ def main(argv: list[str]) -> int:
                   f"nothing.")
             return 2
 
-    old = {r.id: r for r in parse_rows(old_f) if r.id != "UB-ID-PENDING"}
-    new = {r.id: r for r in parse_rows(new_f) if r.id != "UB-ID-PENDING"}
+    old = {r.id: r for r in parse_rows(old_f) if r.id != PENDING_ID}
+    new = {r.id: r for r in parse_rows(new_f) if r.id != PENDING_ID}
 
     silent = []
     for ub, prev in old.items():

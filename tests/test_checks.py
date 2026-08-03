@@ -301,6 +301,91 @@ def test_pending_markers_informational_lists_file_line():
     assert ":5: UB-ID-PENDING" in r.stdout and ":6: UB-ID-PENDING" in r.stdout
 
 
+EMPTY_LEDGER = """\
+# DOCKET
+
+| id | state | title | scope | owner | blocked-by | notes |
+|----|-------|-------|-------|-------|------------|-------|
+"""
+
+
+def test_empty_header_only_ledger_is_not_an_error(tmp_path):
+    """R3-I-1: a correctly-shaped table with zero rows filed yet (a fresh
+    adopter who cleared the sample rows) is a LEGITIMATE state, not the
+    wrong-prefix ambiguity -- the zero-parse guard must not fire, and the
+    checks proceed honestly over zero rows."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text(EMPTY_LEDGER, encoding="utf-8")
+    r = run_check("check_duplicate_ids.py", str(l))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "0 rows" in r.stdout
+    r2 = run_check("check_pending_markers.py", str(l))
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+
+
+def test_wrong_prefix_still_loud_after_empty_carveout(tmp_path):
+    """NEGATIVE CONTROL FOR the R3-I-1 carve-out. DO NOT DELETE AS REDUNDANT.
+    Protects: the zero-parse guard's RED arm after the empty-ledger exemption.
+    Without it, zero_parse could be loosened to 'always False' -- every
+    empty-ledger test above would still pass, and the wrong-prefix trap the
+    guard exists for would return silently."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text(EMPTY_LEDGER + "| DOC-1 | OPEN | renamed | symptom | - | - | filed |\n",
+                 encoding="utf-8")
+    r = run_check("check_duplicate_ids.py", str(l))
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
+def test_prefix_rename_single_site_is_complete(tmp_path):
+    """R3-C-1: renaming the id prefix must be a ONE-SITE edit (ID_PREFIX in
+    checks/_ledger.py) after which the whole check suite works against the
+    new prefix -- including the pending sentinel, the reconciliation gate,
+    and the pending-row exclusion in the duplicate check. R3 proved the old
+    two-site instruction silently defeated the reconciliation gate and
+    produced a silent pass on a real claim theft."""
+    import shutil
+    scratch = tmp_path / "checks"
+    shutil.copytree(CHECKS, scratch)
+    lg = scratch / "_ledger.py"
+    text = lg.read_text(encoding="utf-8")
+    assert 'ID_PREFIX = "UB-"' in text, "single rename site missing from _ledger.py"
+    lg.write_text(text.replace('ID_PREFIX = "UB-"', 'ID_PREFIX = "DOC-"'),
+                  encoding="utf-8")
+
+    ledger = tmp_path / "DOCKET.md"
+    ledger.write_text(
+        "| DOC-101 | OPEN | first matter | symptom | - | - | filed |\n"
+        "| DOC-ID-PENDING | OPEN | second matter | symptom | - | - | filed by S1 |\n"
+        "| DOC-ID-PENDING | OPEN | third matter | symptom | - | - | filed by S2 |\n",
+        encoding="utf-8")
+
+    def run_scratch(script, *args, cwd=None):
+        return subprocess.run([sys.executable, str(scratch / script), *args],
+                              capture_output=True, text=True, encoding="utf-8", cwd=cwd)
+
+    # Reconciliation gate sees BOTH renamed pending markers (R3's silent-zero defeat).
+    r = run_scratch("check_pending_markers.py", str(ledger), "--reconcile")
+    assert r.returncode == 1 and "2 row(s) still pending" in r.stdout, r.stdout + r.stderr
+    # Two pending rows are NOT a duplicate-id false positive (pending excluded).
+    r = run_scratch("check_duplicate_ids.py", str(ledger))
+    assert r.returncode == 0, r.stdout + r.stderr
+    # Phantom citations track the renamed prefix, both arms.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "DOCKET.md").write_text(
+        "| DOC-101 | OPEN | first matter | symptom | - | - | filed |\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("see DOC-101 and DOC-999\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+    r = run_scratch("check_phantom_ids.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "cites DOC-999" in r.stdout, r.stdout
+    assert "cites DOC-101" not in r.stdout, r.stdout
+
+
 # -------------------------------------------------------- state transitions
 
 def test_state_transitions_red_silent_reopen():

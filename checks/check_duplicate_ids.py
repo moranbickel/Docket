@@ -19,7 +19,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import parse_rows  # noqa: E402
+from _ledger import PENDING_ID, parse_rows, zero_parse  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -35,20 +35,20 @@ def main(argv: list[str]) -> int:
             print(f"[duplicate-ids] ERROR: no such ledger: {path}", file=sys.stderr)
             return 2
         rows = parse_rows(path)
-        if not rows and path.read_text(encoding="utf-8").strip():
-            print(f"[duplicate-ids] ERROR: {path} is non-empty but parses to "
-                  f"zero rows -- wrong id prefix or malformed table. Refusing "
-                  f"to report success over nothing.")
+        if not rows and zero_parse(path.read_text(encoding="utf-8")):
+            print(f"[duplicate-ids] ERROR: {path} carries table lines that "
+                  f"parse to zero rows -- wrong id prefix or malformed table. "
+                  f"Refusing to report success over unreadable rows.")
             return 2
         total_rows += len(rows)
         for r in rows:
-            if r.id != "UB-ID-PENDING":
+            if r.id != PENDING_ID:
                 sites[r.id].append(f"{path}:{r.line_no}")
 
     if total_rows == 0:
-        print("[duplicate-ids] ERROR: zero rows parsed across all ledgers -- "
-              "nothing was checked.")
-        return 2
+        print(f"[duplicate-ids] PASS: 0 rows across {len(argv)} ledger(s) -- "
+              f"empty, well-formed ledger(s); nothing filed yet")
+        return 0
 
     dupes = {ub: where for ub, where in sites.items() if len(where) > 1}
     if dupes:

@@ -13,15 +13,12 @@ Usage: check_phantom_ids.py LEDGER [LEDGER ...] [--allow PATH ...]
 """
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import parse_rows, zero_parse  # noqa: E402
-
-CITE_RE = re.compile(r"\bUB-(\d+)\b")
+from _ledger import CITE_RE, ID_PREFIX, PENDING_ID, parse_rows, zero_parse  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -48,7 +45,7 @@ def main(argv: list[str]) -> int:
                   f"rows -- wrong id prefix or malformed table. Refusing to "
                   f"report success over nothing.")
             return 2
-        minted |= {r.id for r in parse_rows(p) if r.id != "UB-ID-PENDING"}
+        minted |= {r.id for r in parse_rows(p) if r.id != PENDING_ID}
 
     r = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
                        encoding="utf-8")
@@ -76,7 +73,7 @@ def main(argv: list[str]) -> int:
             continue  # binary or unreadable: not a citation surface
         for n, line in enumerate(text.splitlines(), start=1):
             for m in CITE_RE.finditer(line):
-                ub = f"UB-{m.group(1)}"
+                ub = f"{ID_PREFIX}{m.group(1)}"
                 if ub not in minted:
                     phantoms.append((f, n, ub))
 

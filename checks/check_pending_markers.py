@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import parse_rows, zero_parse  # noqa: E402
+from _ledger import PENDING_ID, parse_rows, zero_parse  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -37,11 +37,11 @@ def main(argv: list[str]) -> int:
                   f"nothing.")
             return 2
         for row in parse_rows(path):
-            if row.id == "UB-ID-PENDING":
+            if row.id == PENDING_ID:
                 pending.append((str(path), row.line_no))
 
     for f, n in pending:
-        print(f"[pending-markers] {f}:{n}: UB-ID-PENDING")
+        print(f"[pending-markers] {f}:{n}: {PENDING_ID}")
     if reconcile and pending:
         print(f"[pending-markers] FAIL: {len(pending)} row(s) still pending -- "
               f"reconciliation assigns every number or it has not happened")
