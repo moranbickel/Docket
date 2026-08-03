@@ -26,10 +26,13 @@ jobs:
         run: python checks/check_duplicate_ids.py DOCKET.md
 
       - name: phantom ids
-        # Teaching surfaces (README, protocol, templates, examples, tests) cite
-        # SYNTHETIC ids by necessity and are allowlisted consciously. DOCKET.md
-        # (the arg) and CHANGELOG.md are allowed by the check's own default.
-        # Everything else -- workflows, future scripts, EVIDENCE -- stays guarded.
+        # Teaching surfaces (README, protocol, diagram, templates, examples,
+        # tests) cite SYNTHETIC ids by necessity and are allowlisted
+        # consciously. DOCKET.md (the arg) and CHANGELOG.md are allowed by the
+        # check's own default. Everything else stays guarded.
+        # ADOPTERS: this --allow list is THIS repo's layout -- when you copy
+        # this workflow, replace it with your own teaching/doc paths (or drop
+        # it entirely if your docs only cite real rows).
         run: >
           python checks/check_phantom_ids.py DOCKET.md
           --allow README.md PROTOCOL.md diagram.svg templates/ examples/ tests/

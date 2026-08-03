@@ -49,6 +49,12 @@ def main(argv: list[str]) -> int:
         print("[claim-collision] PASS: no HEAD version (initial commit)")
         return 0
 
+    if staged.stdout.strip() and not parse_rows_text(staged.stdout):
+        print(f"[claim-collision] ERROR: staged {ledger} is non-empty but "
+              f"parses to zero rows -- wrong id prefix or malformed table. "
+              f"Refusing to bless a commit over a ledger the check cannot read.")
+        return 2
+
     old = {r.id: r for r in parse_rows_text(head.stdout) if r.id != "UB-ID-PENDING"}
     collisions = []
     for row in parse_rows_text(staged.stdout):

@@ -40,6 +40,46 @@ def test_duplicate_ids_green():
     assert "PASS" in r.stdout
 
 
+def test_duplicate_ids_red_across_shards(tmp_path):
+    """PROTOCOL §9: the ID space spans shards -- the same number once in each
+    of two ledger files is a duplicate and must FAIL when both are passed."""
+    a = tmp_path / "DOCKET-2025.md"
+    b = tmp_path / "DOCKET.md"
+    a.write_text("| UB-500 | DONE | old-year matter | symptom | - | - | closed by commit aaa1111 |\n",
+                 encoding="utf-8")
+    b.write_text("| UB-500 | OPEN | new-year matter | symptom | - | - | filed 2026-08-03 |\n",
+                 encoding="utf-8")
+    r = run_check("check_duplicate_ids.py", str(a), str(b))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "UB-500" in r.stdout and "DOCKET-2025.md" in r.stdout and "DOCKET.md" in r.stdout
+
+
+def test_duplicate_ids_green_across_shards(tmp_path):
+    a = tmp_path / "DOCKET-2025.md"
+    b = tmp_path / "DOCKET.md"
+    a.write_text("| UB-500 | DONE | old-year matter | symptom | - | - | closed by commit aaa1111 |\n",
+                 encoding="utf-8")
+    b.write_text("| UB-501 | OPEN | new-year matter | symptom | - | - | filed 2026-08-03 |\n",
+                 encoding="utf-8")
+    r = run_check("check_duplicate_ids.py", str(a), str(b))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_duplicate_ids_zero_parsed_rows_is_not_a_pass(tmp_path):
+    """A non-empty ledger that parses to ZERO rows (wrong prefix, malformed
+    table) must exit loudly, never print PASS -- a run over nothing has
+    measured nothing. This is the check's own README story applied to itself."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text(
+        "| DOC-1 | OPEN | renamed-prefix row | symptom | - | - | filed |\n"
+        "| DOC-1 | OPEN | duplicated, invisibly | symptom | - | - | filed |\n",
+        encoding="utf-8")
+    r = run_check("check_duplicate_ids.py", str(l))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "zero rows" in r.stdout.lower()
+    assert "PASS" not in r.stdout
+
+
 # --------------------------------------------------------------- phantom ids
 
 def _scratch_repo(tmp_path: Path, files: dict[str, Path]) -> Path:
@@ -170,6 +210,26 @@ def test_claim_collision_green_first_claim(tmp_path):
     subprocess.run(["git", "add", "DOCKET.md"], cwd=wt2, check=True)
     r = run_check("check_claim_collision.py", "DOCKET.md", cwd=wt2)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_claim_collision_zero_parse_staged_is_loud(tmp_path):
+    """A staged ledger that parses to zero rows while non-empty (renamed
+    prefix, mangled table) must exit 2, not silently bless the commit."""
+    repo = tmp_path / "primary"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "DOCKET.md").write_text(LEDGER_CLAIMED, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+    (repo / "DOCKET.md").write_text(
+        "| DOC-1 | OPEN | renamed prefix | symptom | S9 | - | filed |\n",
+        encoding="utf-8")
+    subprocess.run(["git", "add", "DOCKET.md"], cwd=repo, check=True)
+    r = run_check("check_claim_collision.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "zero rows" in (r.stdout + r.stderr).lower()
 
 
 def test_claim_collision_green_release(tmp_path):

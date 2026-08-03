@@ -1,6 +1,6 @@
 # Docket — the protocol
 
-This document is normative. **MUST**, **MUST NOT**, and **SHOULD** mean what they mean in RFC 2119. The README tells the story; this file states the rules a machine — or a tired human — can hold you to.
+I wrote this file the way court rules are written: short numbered sections, no stories, because when two sessions disagree at a merge boundary, nobody wants my anecdotes — they want the rule and its number. The README tells the story; this file states the rules a machine — or a tired human — can hold you to. It is normative: **MUST**, **MUST NOT**, and **SHOULD** mean what they mean in RFC 2119.
 
 One plain definition before the precise language starts: throughout this document, the item's number (its **ID**, `UB-NNNN`) is used as a *join key* — meaning the same literal string appears in the ledger row, the commit message, the PR title, and the closing note, so that a plain-text search on the number reassembles the item's whole history from otherwise unconnected records. That is the entire trick. Everything below exists to keep that trick trustworthy.
 
@@ -15,6 +15,8 @@ One plain definition before the precise language starts: throughout this documen
 ```
 | UB-NNNN | STATE | title | scope | owner | blocked-by | notes |
 ```
+
+The `UB-` prefix is part of the protocol in v0.1 — the checks parse exactly that shape, and they refuse to report success on a ledger that parses to zero rows (a run over nothing is not a pass). Changing the prefix means changing `checks/_ledger.py` and the phantom check's citation pattern together, deliberately.
 
 1.3. Fields:
 
@@ -120,4 +122,4 @@ Mode B is the one proven in the origin system. Its failure mode is known and mec
 
 ## 9. Sharding, at the ceiling
 
-When the file approaches the practical ceiling (order of a few thousand rows / ~1 MB), shard by closing the file (`DOCKET-2026.md`, frozen, still tracked, still grep-able) and opening a successor. IDs continue — the ID space spans shards; the phantom check takes multiple ledger paths.
+When the file approaches the practical ceiling (order of a few thousand rows / ~1 MB), shard by closing the file (`DOCKET-2026.md`, frozen, still tracked, still grep-able) and opening a successor. IDs continue — the ID space spans shards: pass every shard to the checks together (`check_duplicate_ids.py DOCKET-2026.md DOCKET.md`), and the duplicate check counts ids ACROSS the whole set, so a number reused between shards fails exactly like a number reused within one.
