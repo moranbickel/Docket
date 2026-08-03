@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="440" viewBox="0 0 860 440" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="860" height="440" fill="#f8fafc"/>
+  <text x="430" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#111827">Docket — one number per matter, for life</text>
+
+  <!-- sessions -->
+  <g font-size="12" fill="#111827">
+    <rect x="40"  y="62" width="150" height="46" rx="8" fill="#e0e7ff" stroke="#6366f1"/>
+    <text x="115" y="82" text-anchor="middle" font-weight="bold">Session S1</text>
+    <text x="115" y="98" text-anchor="middle">files UB-ID-PENDING</text>
+
+    <rect x="355" y="62" width="150" height="46" rx="8" fill="#e0e7ff" stroke="#6366f1"/>
+    <text x="430" y="82" text-anchor="middle" font-weight="bold">Session S2</text>
+    <text x="430" y="98" text-anchor="middle">claims UB-202</text>
+
+    <rect x="670" y="62" width="150" height="46" rx="8" fill="#e0e7ff" stroke="#6366f1"/>
+    <text x="745" y="82" text-anchor="middle" font-weight="bold">Session S3</text>
+    <text x="745" y="98" text-anchor="middle">closes UB-201 by commit</text>
+  </g>
+
+  <line x1="115" y1="108" x2="330" y2="168" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="430" y1="108" x2="430" y2="168" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="745" y1="108" x2="530" y2="168" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ledger -->
+  <rect x="150" y="172" width="560" height="108" rx="10" fill="#ffffff" stroke="#111827" stroke-width="1.5"/>
+  <text x="430" y="194" text-anchor="middle" font-size="13" font-weight="bold" fill="#111827">DOCKET.md — the ledger (one row = one line = one matter)</text>
+  <g font-size="11.5" fill="#374151">
+    <text x="172" y="216">| UB-201 | DONE    | retry hammering on expired token | S1 | closed by 9be41aa |</text>
+    <text x="172" y="234">| UB-202 | OPEN    | CSV export drops comma rows      | S2 | claimed 2026-08-02 |</text>
+    <text x="172" y="252">| UB-ID-PENDING | OPEN | flaky auth test           | -  | filed, awaiting number |</text>
+  </g>
+  <text x="430" y="271" text-anchor="middle" font-size="11" fill="#6b7280">same-row concurrent edits CONFLICT (never merge=union) · the number travels through commits, PRs, reviews</text>
+
+  <!-- checks -->
+  <line x1="430" y1="280" x2="430" y2="316" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="60" y="320" width="740" height="82" rx="10" fill="#ecfdf5" stroke="#059669"/>
+  <text x="430" y="342" text-anchor="middle" font-size="13" font-weight="bold" fill="#065f46">six checks — every one ships with a case it fails and a case it passes</text>
+  <g font-size="11.5" fill="#065f46">
+    <text x="430" y="364" text-anchor="middle">duplicate ids · phantom citations · merge-driver-not-union · claim collisions (pre-commit)</text>
+    <text x="430" y="382" text-anchor="middle">pending markers · silent reopens of DONE</text>
+  </g>
+
+  <text x="430" y="426" text-anchor="middle" font-size="11" fill="#6b7280">file it → claim it → close it on the record · github.com/moranbickel/Docket</text>
+</svg>

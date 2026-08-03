@@ -1,0 +1,10 @@
+# --- Docket ledger: append to your .gitattributes ---------------------------
+# The ledger is a numbered list of records, NOT an append-only log, so it is
+# deliberately NOT under merge=union. Union silently keeps BOTH copies when
+# two branches edit the same row -- the duplicate appears only in the merge
+# commit, where no author is looking. A concurrent same-row edit must be a
+# CONFLICT you resolve on the record. If someone "fixes" noisy ledger merges
+# by adding `DOCKET.md merge=union` here, CI's check_merge_driver.py fails
+# the build and points at this comment.
+DOCKET.md text eol=lf
+# ----------------------------------------------------------------------------

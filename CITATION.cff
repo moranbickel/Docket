@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "Docket: A Numbered, In-Repo Work Ledger for Concurrent AI Coding Sessions"
+message: "If you use this work, please cite it as below."
+type: software
+authors:
+  - family-names: Bickel
+    given-names: Moran
+    orcid: "https://orcid.org/0009-0009-4424-5900"
+version: "0.1"
+date-released: "2026-08-03"
+url: "https://github.com/moranbickel/Docket"
+repository-code: "https://github.com/moranbickel/Docket"
+license:
+  - MIT
+  - CC-BY-4.0
+abstract: "A numbered, in-repo, plain-text work ledger for concurrent AI coding sessions - file it, claim it, close it on the record. One number per matter for life, claims before work, closures that cite commits, and six mechanical checks (duplicates, phantom citations, merge-driver safety, claim collisions, pending IDs, silent reopens)."
+keywords:
+  - ai-agents
+  - multi-agent
+  - work-ledger
+  - task-tracking
+  - backlog
+  - session-coordination
+  - claude-code
+  - workflow-protocols

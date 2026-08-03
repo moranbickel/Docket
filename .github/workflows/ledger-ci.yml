@@ -1,0 +1,55 @@
+name: ledger-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # state-transitions diffs against the parent commit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Each check is its own step and its own exit code. No &&-chains, no
+      # pipes: a chain launders the first verdict behind the last command's.
+
+      - name: duplicate ids
+        run: python checks/check_duplicate_ids.py DOCKET.md
+
+      - name: phantom ids
+        # Teaching surfaces (README, protocol, templates, examples, tests) cite
+        # SYNTHETIC ids by necessity and are allowlisted consciously. DOCKET.md
+        # (the arg) and CHANGELOG.md are allowed by the check's own default.
+        # Everything else -- workflows, future scripts, EVIDENCE -- stays guarded.
+        run: >
+          python checks/check_phantom_ids.py DOCKET.md
+          --allow README.md PROTOCOL.md templates/ examples/ tests/
+
+      - name: merge driver is not union
+        run: python checks/check_merge_driver.py DOCKET.md
+
+      - name: pending markers (informational listing)
+        run: python checks/check_pending_markers.py DOCKET.md
+
+      - name: state transitions (loud reopens only)
+        run: |
+          if git rev-parse HEAD~1 >/dev/null 2>&1 && git cat-file -e HEAD~1:DOCKET.md 2>/dev/null; then
+            git show HEAD~1:DOCKET.md > /tmp/docket_old.md
+            python checks/check_state_transitions.py --old /tmp/docket_old.md --new DOCKET.md
+          else
+            echo "no parent ledger version (initial commit) -- nothing to compare"
+          fi
+
+      - name: fixture suite (every check RED on its failing case, GREEN on its passing case)
+        run: |
+          python -m pip -q install pytest
+          python -m pytest tests/ -q

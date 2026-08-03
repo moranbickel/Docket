@@ -1,0 +1,9 @@
+# The ledger MUST NOT use the union merge driver (PROTOCOL.md section 7).
+# Union is for append-only logs. DOCKET.md rows are records with identity:
+# two sessions editing the same row must CONFLICT, loudly, at merge time --
+# union would keep both copies silently, and the duplicates would surface
+# only in merge commits, where no author is looking. No merge attribute is
+# set here ON PURPOSE; CI (check_merge_driver.py) fails if one ever
+# resolves to union for this path, however it arrives (glob, macro, nested
+# attributes file).
+DOCKET.md text eol=lf
