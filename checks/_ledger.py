@@ -50,3 +50,10 @@ def parse_rows_text(text: str) -> list[Row]:
 
 def parse_rows(path: Path) -> list[Row]:
     return parse_rows_text(path.read_text(encoding="utf-8"))
+
+
+def zero_parse(text: str) -> bool:
+    """True when `text` is non-blank yet yields zero rows -- the ambiguous
+    instrument state (renamed id prefix, mangled table). Every check treats
+    this as exit 2, never success: a run over nothing has measured nothing."""
+    return bool(text.strip()) and not parse_rows_text(text)

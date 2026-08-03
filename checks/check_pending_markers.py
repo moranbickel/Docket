@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import parse_rows  # noqa: E402
+from _ledger import parse_rows, zero_parse  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -29,6 +29,12 @@ def main(argv: list[str]) -> int:
         path = Path(arg)
         if not path.is_file():
             print(f"[pending-markers] ERROR: no such ledger: {path}", file=sys.stderr)
+            return 2
+        if zero_parse(path.read_text(encoding="utf-8")):
+            print(f"[pending-markers] ERROR: {path} is non-empty but parses "
+                  f"to zero rows -- wrong id prefix or malformed table. "
+                  f"'0 pending' over an unreadable ledger is a reading of "
+                  f"nothing.")
             return 2
         for row in parse_rows(path):
             if row.id == "UB-ID-PENDING":

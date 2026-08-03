@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import parse_rows  # noqa: E402
+from _ledger import parse_rows, zero_parse  # noqa: E402
 
 CITE_RE = re.compile(r"\bUB-(\d+)\b")
 
@@ -42,6 +42,11 @@ def main(argv: list[str]) -> int:
         p = Path(lp)
         if not p.is_file():
             print(f"[phantom-ids] ERROR: no such ledger: {p}", file=sys.stderr)
+            return 2
+        if zero_parse(p.read_text(encoding="utf-8")):
+            print(f"[phantom-ids] ERROR: {p} is non-empty but parses to zero "
+                  f"rows -- wrong id prefix or malformed table. Refusing to "
+                  f"report success over nothing.")
             return 2
         minted |= {r.id for r in parse_rows(p) if r.id != "UB-ID-PENDING"}
 

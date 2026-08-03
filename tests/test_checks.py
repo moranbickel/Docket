@@ -242,6 +242,46 @@ def test_claim_collision_green_release(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_phantom_ids_zero_parse_ledger_is_loud(tmp_path):
+    """R2-C-1 arm: a non-empty ledger parsing to zero rows must exit 2 --
+    with a renamed prefix BOTH sides go empty (0 minted, 0 UB-cites) and the
+    old behavior blessed the void with 'PASS (0 minted)'."""
+    repo = _scratch_repo(tmp_path, {"DOCKET.md": FIX / "phantom_ledger.md"})
+    (repo / "DOCKET.md").write_text(
+        "| DOC-1 | OPEN | renamed prefix | symptom | - | - | filed |\n",
+        encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "renamed"], cwd=repo, check=True)
+    r = run_check("check_phantom_ids.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "zero rows" in (r.stdout + r.stderr).lower()
+
+
+def test_state_transitions_zero_parse_is_loud(tmp_path):
+    """R2-C-1 arm: old+new both non-empty but parsing to zero rows must exit
+    2 -- the old behavior reported 'no silent transition' over a comparison
+    of nothing with nothing."""
+    old = tmp_path / "old.md"; new = tmp_path / "new.md"
+    old.write_text("| DOC-1 | DONE | renamed | symptom | - | - | closed by commit abc1234 |\n",
+                   encoding="utf-8")
+    new.write_text("| DOC-1 | OPEN | renamed | symptom | - | - | quietly reopened |\n",
+                   encoding="utf-8")
+    r = run_check("check_state_transitions.py", "--old", str(old), "--new", str(new))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "zero rows" in (r.stdout + r.stderr).lower()
+
+
+def test_pending_markers_zero_parse_is_loud(tmp_path):
+    """R2-C-1 arm, same class: 'PASS: 0 pending' over a ledger that parsed to
+    zero rows is a reading of nothing."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text("| DOC-1 | OPEN | renamed | symptom | - | - | filed |\n",
+                 encoding="utf-8")
+    r = run_check("check_pending_markers.py", str(l))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "zero rows" in (r.stdout + r.stderr).lower()
+
+
 # ---------------------------------------------------------- pending markers
 
 def test_pending_markers_red_reconcile_mode():
