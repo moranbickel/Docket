@@ -32,7 +32,7 @@ jobs:
         # Everything else -- workflows, future scripts, EVIDENCE -- stays guarded.
         run: >
           python checks/check_phantom_ids.py DOCKET.md
-          --allow README.md PROTOCOL.md templates/ examples/ tests/
+          --allow README.md PROTOCOL.md diagram.svg templates/ examples/ tests/
 
       - name: merge driver is not union
         run: python checks/check_merge_driver.py DOCKET.md

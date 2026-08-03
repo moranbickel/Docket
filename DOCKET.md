@@ -6,11 +6,11 @@
 
 | id | state | title | scope | owner | blocked-by | notes |
 |----|-------|-------|-------|-------|------------|-------|
-| UB-1 | OPEN | Author README + PROTOCOL in the series voice | symptom | session-d4c8910c | - | filed 2026-08-03; claimed 2026-08-03 |
-| UB-2 | OPEN | Ship the six checks with exit-code contracts | symptom | session-d4c8910c | - | filed 2026-08-03; claimed 2026-08-03 |
-| UB-3 | OPEN | Fixture pair (one failing, one passing) per check; claim-collision RED arm in a secondary worktree | symptom | session-d4c8910c | - | filed 2026-08-03; claimed 2026-08-03 |
-| UB-4 | OPEN | Wire CI: five checks, each its own step and exit code | symptom | session-d4c8910c | - | filed 2026-08-03; claimed 2026-08-03 |
-| UB-5 | OPEN | Templates + three-session example + diagram | symptom | session-d4c8910c | - | filed 2026-08-03; claimed 2026-08-03 |
+| UB-1 | DONE | Author README + PROTOCOL in the series voice | symptom | - | - | filed 2026-08-03; claimed 2026-08-03; closed by commit a0919d9 2026-08-03 |
+| UB-2 | DONE | Ship the six checks with exit-code contracts | symptom | - | - | filed 2026-08-03; claimed 2026-08-03; closed by commit a0919d9 2026-08-03 |
+| UB-3 | DONE | Fixture pair (one failing, one passing) per check; claim-collision RED arm in a secondary worktree | symptom | - | - | filed 2026-08-03; claimed 2026-08-03; closed by commit a0919d9 2026-08-03 (16 tests, both arms per check) |
+| UB-4 | DONE | Wire CI: five checks, each its own step and exit code | symptom | - | - | filed 2026-08-03; claimed 2026-08-03; closed by commit a0919d9 2026-08-03 |
+| UB-5 | DONE | Templates + three-session example + diagram | symptom | - | - | filed 2026-08-03; claimed 2026-08-03; closed by commit a0919d9 2026-08-03; diagram's synthetic ids consciously allowlisted after the phantom check caught them |
 | UB-6 | OPEN | EVIDENCE.md figures verified against primary artifacts | symptom | - | - | filed 2026-08-03; BLOCKED-in-substance on operator sign-off (item 8 of the build dispatch); draft carries sourced candidates only |
 | UB-7 | OPEN | Review pass on README + PROTOCOL at the series floor (>= 9.0, 0 Critical/Important) | symptom | - | - | filed 2026-08-03; reviewer capacity window pending |
 | UB-8 | OPEN | Cross-link PRs into the five sibling repos | symptom | - | UB-7 | filed 2026-08-03; prepared locally, pushed only after the main repo is up |
