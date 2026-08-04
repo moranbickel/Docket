@@ -13,3 +13,4 @@ Initial public version, re-authored from the origin system's in-production ledge
 - examples/ - a three-session walkthrough (mint, file-pending, claim) and the union-merge pathology shown against the correct conflict, before/after.
 - DOCKET.md - this repo's own ledger, kept under its own protocol from the first commit.
 - EVIDENCE.md - draft; every figure ships only on operator sign-off against primary artifacts.
+- Review: five adversarial rounds against the published sibling protocol's own reviewer template (REWORK 3.6 -> REVISE 7.8 -> 7.3 -> 6.5 -> PASS 9.5, zero Critical/Important/Minor at the floor). Each round's findings were folded and the next round verified the fold; the guards that survived were armed by mutation in both directions.
