@@ -13,11 +13,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # state-transitions diffs against the parent commit
+          # Full history, deliberately. Two checks need more than the tip:
+          # the state-transition range walks every edge in the push, and the
+          # closure check decides whether a cited commit is REACHABLE. A
+          # shallow clone makes live commits look dangling, so the closure
+          # check refuses to run in one rather than report a false failure.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: resolve the range this push or PR actually covers
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          echo "DOCKET_BASE=$BASE"          >> "$GITHUB_ENV"
+          echo "DOCKET_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "range: $BASE..$(git rev-parse HEAD)"
 
       # Each check is its own step and its own exit code. No &&-chains, no
       # pipes: a chain launders the first verdict behind the last command's.
@@ -43,16 +59,23 @@ jobs:
       - name: pending markers (informational listing)
         run: python checks/check_pending_markers.py DOCKET.md
 
-      - name: state transitions (loud reopens only)
-        run: |
-          if git rev-parse HEAD~1 >/dev/null 2>&1 && git cat-file -e HEAD~1:DOCKET.md 2>/dev/null; then
-            git show HEAD~1:DOCKET.md > /tmp/docket_old.md
-            python checks/check_state_transitions.py --old /tmp/docket_old.md --new DOCKET.md
-          else
-            echo "no parent ledger version (initial commit) -- nothing to compare"
-          fi
+      - name: closure references resolve and are reachable
+        run: python checks/check_closure_references.py DOCKET.md
+
+      - name: state transitions across EVERY edge in the range
+        # Not HEAD~1..HEAD. A silent reopen in the middle of a multi-commit
+        # push is invisible to an endpoint comparison; this walks every
+        # parent->child edge in the range, merges included.
+        run: >
+          python checks/check_state_transitions_range.py
+          --base "$DOCKET_BASE" --head "$DOCKET_HEAD"
+
+      - name: commits cite the rows they advance
+        run: >
+          python checks/check_commit_ids.py
+          --base "$DOCKET_BASE" --head "$DOCKET_HEAD"
 
       - name: fixture suite (every check RED on its failing case, GREEN on its passing case)
         run: |
           python -m pip -q install pytest
-          python -m pytest tests/ -q
+          python -m pytest tests/test_checks.py -q

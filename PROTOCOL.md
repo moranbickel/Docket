@@ -16,7 +16,7 @@ One plain definition before the precise language starts: throughout this documen
 | UB-NNNN | STATE | title | scope | owner | blocked-by | notes |
 ```
 
-The `UB-` prefix is part of the protocol in v0.1 — the checks parse exactly that shape, and they refuse to report success while **any single** row-shaped line fails to parse, naming its line number, even if every other row in the file reads fine (a well-formed table with nothing filed yet is a legitimate empty ledger and passes as one). A check that skipped the line it could not read would report a clean pass over whatever that line said. Changing the prefix is a ONE-site edit, made deliberately: `ID_PREFIX` at the top of `checks/_ledger.py`, from which every check derives its row pattern, its citation pattern, and the pending-marker sentinel. The suite's rename rehearsal (`test_prefix_rename_single_site_is_complete`) is the proof that the instruction is complete.
+The `UB-` prefix is part of the protocol — the checks parse exactly that shape, and they refuse to report success while **any single** row-shaped line fails to parse, naming its line number, even if every other row in the file reads fine (a well-formed table with nothing filed yet is a legitimate empty ledger and passes as one). A check that skipped the line it could not read would report a clean pass over whatever that line said. Changing the prefix is a ONE-site edit, made deliberately: `ID_PREFIX` at the top of `checks/_ledger.py`, from which every check derives its row pattern, its citation pattern, and the pending-marker sentinel. The suite's rename rehearsal (`test_prefix_rename_single_site_is_complete`) is the proof that the instruction is complete.
 
 1.3. Fields:
 
@@ -54,15 +54,19 @@ Mode B is the one proven in the origin system. Its failure mode is known and mec
 
 2.2. `check_pending_markers.py` enumerates pending rows `file:line`. It is informational by default and **MUST** be run strict (`--reconcile`, nonzero exit on any marker) as the reconciliation gate.
 
+2.3. **Work begins after reconciliation, not on a pending row.** A pending row is a *filing*, not a claim. It cannot be claimed — the claim check excludes the pending sentinel by necessity, because every pending row shares it, so two sessions writing their names onto two different pending rows are indistinguishable from one session taking another's. It cannot be cited either: there is no number to put in a commit message, which puts §3.1 out of reach for the whole of that work. A session that wants to start **MUST** obtain a number first: run the reconciliation pass (§2.2), or ask the authority for one.
+
+The cost of the rule is a wait. The cost of not having it is a row that was worked, merged and closed while still spelled `UB-ID-PENDING`, whose history no `git grep` will ever reassemble — which is the one thing this protocol exists to prevent. Filing does not wait: file the instant you find the thing, with the pending marker, and let reconciliation catch up.
+
 ---
 
 ## 3. The number travels (citation convention)
 
-3.1. Every commit that advances an item **MUST** carry the item's ID verbatim in the commit message. PR titles, review verdicts, and closure notes likewise.
+3.1. Every commit that advances an item **MUST** carry the item's ID verbatim in the commit message. PR titles, review verdicts, and closure notes likewise. `check_commit_ids.py` enforces this over a commit range. *Advancing* means modifying a row that already existed; **adding** a row is not advancing one, and owes no citation — under Mode B a filing has no number to cite yet (§2).
 
 3.2. Consequence, stated as the design intent: provenance becomes a grep. `git log --grep=UB-1023` and `git grep UB-1023` reassemble the item's history with no tooling beyond git.
 
-3.3. Consequence, the other direction: **a citation to a number with no row behind it is a detectable class.** `check_phantom_ids.py` scans tracked files for `UB-\d+` references and fails on any ID that has no ledger row. The ID space is closed; fabrication is arithmetic, not judgment. (Allowlist: the ledger itself and `CHANGELOG.md`; extend it consciously, not conveniently.)
+3.3. Consequence, the other direction: **a citation to a number with no row behind it is a detectable class.** `check_phantom_ids.py` scans tracked files for `UB-\d+` references and fails on any ID that has no ledger row. A commit message is not a tracked file, so that surface is covered by `check_commit_ids.py` instead — between them, every place the number travels is read. The ID space is closed; fabrication is arithmetic, not judgment. (Allowlist: the ledger itself and `CHANGELOG.md`; extend it consciously, not conveniently.)
 
 ---
 
@@ -76,7 +80,7 @@ Mode B is the one proven in the origin system. Its failure mode is known and mec
 
 4.4. Stated plainly, because a guard whose limits are unstated will be trusted past them: **mutual exclusion before work requires a shared serialization point, and this protocol does not have one.** If you need it, the shape is a claim-only commit that must land on a designated coordination branch before implementation begins, with a rejected non-fast-forward push meaning "refresh and retry". That is deliberately NOT specified here and NOT built: it adds a network round trip and a shared branch to a single-file protocol, and it should not exist until someone hits the collision often enough to measure it.
 
-4.4. The check resolves the repository root **from the worktree the commit is happening in** (`git rev-parse --show-toplevel` at hook time). It **MUST NOT** read the root from an environment variable: with several worktrees live, an env var set by one session silently points another session's hook at the wrong ledger, and the hook passes while guarding nothing.
+4.5. The check resolves the repository root **from the worktree the commit is happening in** (`git rev-parse --show-toplevel` at hook time). It **MUST NOT** read the root from an environment variable: with several worktrees live, an env var set by one session silently points another session's hook at the wrong ledger, and the hook passes while guarding nothing.
 
 ---
 
@@ -88,11 +92,13 @@ Mode B is the one proven in the origin system. Its failure mode is known and mec
 
 5.3. `check_state_transitions.py` compares the previous ledger version to the current one and fails any `DONE`/`WONTFIX` row whose state changed without a `reopened:` token added in the same change.
 
+5.4. That comparison **MUST** be run over **every** parent→child edge in a push or PR, not only the last one — `check_state_transitions_range.py` is the driver that does it. Comparing endpoints alone misses a reopen that happens in the middle of a multi-commit push and is tidied up before the tip: both ends agree, the transition is in the history, and nobody was told. Merge commits are included, against their first parent, because a bad conflict resolution reopens a row with no authored commit saying so.
+
 ---
 
 ## 6. Closure cites the artifact
 
-6.1. A row moving to `DONE` **MUST** name, in `notes`, the artifact that closed it — at minimum one commit hash; a PR number or review verdict strengthens it.
+6.1. A row moving to `DONE` **MUST** name, in `notes`, the artifact that closed it — at minimum one commit hash; a PR number or review verdict strengthens it. `check_closure_references.py` enforces 6.1 and 6.2 mechanically: at least one hash in the note must resolve to a commit **reachable from HEAD**. Existence is not enough — a rewritten or dropped branch leaves objects alive that have left the project's history, and a citation to one points nowhere a reader can follow. `WONTFIX` is exempt; nothing closed it.
 
 6.2. A closure note that points at nothing ("done", "fixed", "handled") is not a closure; treat it as `PARTIAL` in review.
 
@@ -114,7 +120,7 @@ Mode B is the one proven in the origin system. Its failure mode is known and mec
 
 ## 8. What the checks are, and are not
 
-8.1. The six checks in `checks/` are the protocol's teeth: duplicates (§1.3 id), phantoms (§3.3), merge driver (§7), claim collisions (§4), pending markers (§2.2), state transitions (§5.3). CI runs five; the claim check runs pre-commit, where the colliding claim actually happens.
+8.1. The eight checks in `checks/` are the protocol's teeth: duplicates (§1.3 id), phantoms (§3.3), merge driver (§7), claim collisions (§4), pending markers (§2.2), state transitions (§5.3, driven over the range by §5.4), closure references (§6.1), commit ids (§3.1). CI runs seven; the claim check runs pre-commit, where the colliding claim actually happens.
 
 8.2. Every check ships with a fixture it fails and a fixture it passes, in `tests/`. If you extend a check, extend both fixtures first and watch the new failing case actually fail — a checker that has never been seen failing has not been seen working.
 

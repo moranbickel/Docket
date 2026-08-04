@@ -6,14 +6,14 @@ authors:
   - family-names: Bickel
     given-names: Moran
     orcid: "https://orcid.org/0009-0009-4424-5900"
-version: "0.1"
-date-released: "2026-08-03"
+version: "0.2"
+date-released: "2026-08-04"
 url: "https://github.com/moranbickel/Docket"
 repository-code: "https://github.com/moranbickel/Docket"
 license:
   - MIT
   - CC-BY-4.0
-abstract: "A numbered, in-repo, plain-text work ledger for concurrent AI coding sessions - file it, claim it, close it on the record. One number per matter for life, claims before work, closures that cite commits, and six mechanical checks (duplicates, phantom citations, merge-driver safety, claim collisions, pending IDs, silent reopens)."
+abstract: "A numbered, in-repo, plain-text work ledger for concurrent AI coding sessions - file it, claim it, close it on the record. One number per matter for life, claims before work, closures that cite commits, and eight mechanical checks (duplicates, phantom citations, merge-driver safety, claim collisions, pending IDs, silent reopens across every commit in a push, closure citations that resolve and remain reachable, and commit messages that name the row they advance)."
 keywords:
   - claude-code
   - coding-agents

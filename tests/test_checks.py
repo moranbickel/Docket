@@ -468,3 +468,447 @@ def test_state_transitions_green_loud_reopen():
                   "--old", str(FIX / "st_old.md"),
                   "--new", str(FIX / "st_new_loud.md"))
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ==========================================================================
+#                              v0.2 additions
+# ==========================================================================
+# Installer/CI parity, range-aware transitions, commit-id citation, closure
+# references.
+#
+# Every guard below ships both arms. Where a GREEN arm could pass VACUOUSLY
+# -- an extractor that found no paths, a range that compared no edges, a
+# checker that examined no rows -- it asserts on the count the instrument
+# reports, not merely on its exit code. A green that could not have been red
+# is not evidence, and its emptiness is invisible precisely because green is
+# the colour you were expecting.
+
+import re as _re
+import shutil as _shutil
+
+REPO = Path(__file__).parent.parent
+INSTALLER = REPO / "templates" / "install.sh"
+
+LEDGER_HEAD = ("| id | state | title | scope | owner | blocked-by | notes |\n"
+               "|----|-------|-------|-------|-------|------------|-------|\n")
+
+
+def _ledger(*rows: str) -> str:
+    return LEDGER_HEAD + "".join(
+        r if r.endswith("\n") else r + "\n" for r in rows)
+
+
+def _g(repo: Path, *args: str, check: bool = True):
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                          text=True, encoding="utf-8", check=check)
+
+
+def _init_repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    _g(path, "init", "-q", "-b", "main")
+    _g(path, "config", "user.email", "t@t")
+    _g(path, "config", "user.name", "t")
+    return path
+
+
+def _commit(repo: Path, message: str, files: dict[str, str] | None = None) -> str:
+    for name, text in (files or {}).items():
+        p = repo / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-qm", message)
+    return _g(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+# ------------------------------------------------ installer / CI parity
+
+# The ONE instrument in this file with no shipped artifact behind it: nothing
+# in checks/ extracts invoked paths from a workflow, so this test IS the
+# extractor. Declared rather than left implicit; its own vacuity is guarded
+# by the >= assertions at every call site.
+_INVOKED_PATH_RE = _re.compile(
+    r"\b((?:checks|tests)/[A-Za-z0-9_./-]+\.(?:py|md|txt))\b")
+
+
+def _workflow_invoked_paths(text: str) -> set[str]:
+    return set(_INVOKED_PATH_RE.findall(text))
+
+
+def _source_copy(tmp_path: Path) -> Path:
+    """A faithful copy of everything the installer reads, so a mutated copy
+    of the installer still resolves its own source tree."""
+    src = tmp_path / "docket-src"
+    ignore = _shutil.ignore_patterns("__pycache__", "*.pyc")
+    for rel in ("checks", "tests", "templates", ".github"):
+        _shutil.copytree(REPO / rel, src / rel, ignore=ignore)
+    return src
+
+
+def _run_installer(installer: Path, target: Path):
+    # `sh`, matching the script's own shebang, and POSIX-style paths.
+    # Measured on Windows: the bare bash.EXE shipped with Git resolves a
+    # drive-letter path against its own root and reports "No such file or
+    # directory" for a script that is plainly there, while sh.EXE beside it
+    # reads the same path fine. Both exist on CI, so the shebang decides.
+    shell = _shutil.which("sh") or _shutil.which("bash") or "sh"
+    return subprocess.run(
+        [shell, Path(installer).as_posix(), Path(target).as_posix()],
+        capture_output=True, text=True, encoding="utf-8")
+
+
+def test_installed_workflow_paths_all_resolve(tmp_path):
+    """THE control for the v0.1 quick-start defect.
+
+    The installer copied three files into .docket-checks/ while the workflow
+    it told you to copy invoked five checks under checks/ plus the suite
+    under tests/. Both artifacts were internally consistent; only their
+    INTERSECTION was wrong, which is why reading either one alone missed it
+    for a whole release. This reads the INSTALLED workflow, extracts every
+    path it invokes, and asserts each is on disk in the target."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "an adopter repo\n"})
+
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    invoked = _workflow_invoked_paths(
+        (target / ".github/workflows/ledger-ci.yml").read_text(encoding="utf-8"))
+    # Non-vacuity: an extractor that found nothing would make the loop below
+    # trivially true. Seven checks are invoked by name, plus the suite.
+    assert len(invoked) >= 8, f"extractor found only {sorted(invoked)}"
+
+    missing = [p for p in sorted(invoked) if not (target / p).is_file()]
+    assert not missing, f"workflow invokes paths the installer did not place: {missing}"
+
+    # And checks/ travelled WHOLE, not just the invoked subset:
+    # check_state_transitions.py is invoked by the range driver, not by CI
+    # directly, so path-extraction alone would never have asked for it.
+    src_checks = {p.name for p in (REPO / "checks").glob("*.py")}
+    assert len(src_checks) >= 7, f"source checks/ looks wrong: {sorted(src_checks)}"
+    absent = [n for n in sorted(src_checks) if not (target / "checks" / n).is_file()]
+    assert not absent, f"checks/ did not travel whole: {absent}"
+
+
+def test_parity_control_fails_when_the_installer_drops_the_suite(tmp_path):
+    """NEGATIVE CONTROL FOR test_installed_workflow_paths_all_resolve.
+    DO NOT DELETE AS REDUNDANT.
+
+    Protects: that the parity test can actually go RED. Without it, the
+    parity assertions could be weakened -- or the extractor could quietly
+    match nothing -- and the suite would stay green while the v0.1 defect
+    was fully reintroduced. This reproduces that defect by neutering the
+    installer's copy step and requires the parity predicate to catch it.
+
+    Note what the neutered installer does: it EXITS 0. A broken install that
+    reports success is the exact shape of the original bug, and is why the
+    parity predicate, not the installer's exit code, is the guard."""
+    # Mutate a faithful COPY of the source tree: the installer resolves its
+    # own source from dirname($0)/.., so a lone script in a temp dir would
+    # fail for the wrong reason and the control would prove nothing.
+    src_tree = _source_copy(tmp_path)
+    broken = src_tree / "templates" / "install.sh"
+    src = broken.read_text(encoding="utf-8")
+    assert "find checks tests -type f" in src, "installer copy step moved"
+    broken.write_text(src.replace("find checks tests -type f",
+                                  "find checks -type f"), encoding="utf-8")
+
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "an adopter repo\n"})
+    r = _run_installer(broken, target)
+    assert r.returncode == 0, "the neutered installer is expected to still exit 0"
+
+    invoked = _workflow_invoked_paths(
+        (target / ".github/workflows/ledger-ci.yml").read_text(encoding="utf-8"))
+    assert len(invoked) >= 8
+    missing = [p for p in sorted(invoked) if not (target / p).is_file()]
+    assert missing, ("the parity predicate stayed green over an install with "
+                     "no tests/ -- it cannot fail, so it proves nothing")
+    assert any(p.startswith("tests/") for p in missing), missing
+
+
+def test_installer_refuses_to_clobber_a_differing_file(tmp_path):
+    """An adopter with their own checks/check_duplicate_ids.py is told, not
+    silently overwritten."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {
+        "README.md": "an adopter repo\n",
+        "checks/check_duplicate_ids.py": "# mine, not yours\n"})
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "refusing to overwrite" in (r.stdout + r.stderr).lower()
+    assert (target / "checks/check_duplicate_ids.py").read_text(
+        encoding="utf-8") == "# mine, not yours\n"
+
+
+def test_installer_leaves_an_existing_ledger_alone(tmp_path):
+    """A repo that already keeps a docket must not have it replaced by the
+    starter. Three sample rows overwriting live work would be the most
+    expensive possible install bug."""
+    target = _init_repo(tmp_path / "adopter")
+    mine = _ledger("| UB-77 | OPEN | my real matter | symptom | - | - | filed |")
+    _commit(target, "initial", {"DOCKET.md": mine})
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (target / "DOCKET.md").read_text(encoding="utf-8") == mine
+    assert "left untouched" in r.stdout
+
+
+# ------------------------------------------- state transitions over a range
+
+def _repo_with_midrange_reopen(tmp_path: Path, reopen_note: str):
+    """c1 files a DONE row; c2 flips it to OPEN; c3 flips it back to DONE.
+    The ENDPOINTS agree (DONE at c1, DONE at c3) -- only the middle edge
+    carries the transition."""
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    c1 = _commit(repo, "file and close UB-101", {"DOCKET.md": _ledger(
+        "| UB-101 | DONE | a matter | symptom | - | - | closed by commit abc1234 |")})
+    _commit(repo, "work on UB-101 again", {"DOCKET.md": _ledger(
+        f"| UB-101 | OPEN | a matter | symptom | - | - | closed by commit abc1234{reopen_note} |")})
+    c3 = _commit(repo, "close UB-101 again", {"DOCKET.md": _ledger(
+        f"| UB-101 | DONE | a matter | symptom | - | - | closed by commit abc1234{reopen_note} |")})
+    return repo, c1, c3
+
+
+def test_state_range_catches_a_silent_reopen_mid_push(tmp_path):
+    """RED arm: a DONE->OPEN inside a multi-commit push, with both endpoints
+    DONE."""
+    repo, c1, c3 = _repo_with_midrange_reopen(tmp_path, reopen_note="")
+    r = run_check("check_state_transitions_range.py", "--base", c1,
+                  "--head", c3, cwd=repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "UB-101: DONE -> OPEN" in r.stdout, r.stdout
+
+
+def test_endpoint_only_comparison_misses_what_the_range_catches(tmp_path):
+    """NEGATIVE CONTROL FOR the range driver. DO NOT DELETE AS REDUNDANT.
+
+    Protects: the claim that RANGE-awareness is what fixes the defect.
+    Without it, the RED arm above could be passing for some unrelated reason
+    and the driver could be reverted to an endpoint comparison with the suite
+    still green. This runs the OLD method -- the two endpoint ledgers
+    compared directly, exactly what fetch-depth 2 + HEAD~1 did -- over the
+    very same history, and requires it to report CLEAN. The defect is real
+    and the old instrument cannot see it."""
+    repo, c1, c3 = _repo_with_midrange_reopen(tmp_path, reopen_note="")
+    old = tmp_path / "old.md"
+    new = tmp_path / "new.md"
+    old.write_text(_g(repo, "show", f"{c1}:DOCKET.md").stdout, encoding="utf-8")
+    new.write_text(_g(repo, "show", f"{c3}:DOCKET.md").stdout, encoding="utf-8")
+    r = run_check("check_state_transitions.py", "--old", str(old), "--new", str(new))
+    assert r.returncode == 0, (
+        "the endpoint comparison was expected to MISS this; if it now catches "
+        "it, the fixture no longer reproduces the defect")
+    assert "PASS" in r.stdout
+
+
+def test_state_range_green_when_the_reopen_is_annotated(tmp_path):
+    """GREEN twin. Same history, same middle edge, one dated note added."""
+    repo, c1, c3 = _repo_with_midrange_reopen(
+        tmp_path, reopen_note="; 2026-08-04 reopened: regression found in prod")
+    r = run_check("check_state_transitions_range.py", "--base", c1,
+                  "--head", c3, cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # Non-vacuity: a driver that walked ZERO edges would also exit 0. Both
+    # ledger-changing edges in this range must actually have been compared.
+    assert "2 ledger-changing edge(s) examined" in r.stdout, r.stdout
+
+
+def test_state_range_says_not_run_rather_than_pass_on_an_unusable_base(tmp_path):
+    """A new branch or force push gives an all-zero base. The driver must say
+    it read nothing, never print a PASS over a range it never walked."""
+    repo, _c1, c3 = _repo_with_midrange_reopen(tmp_path, reopen_note="")
+    r = run_check("check_state_transitions_range.py", "--base", "0" * 40,
+                  "--head", c3, cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NOT RUN" in r.stdout and "PASS" not in r.stdout, r.stdout
+
+
+# ------------------------------------------------------------- commit ids
+
+def test_commit_ids_red_advance_without_citation(tmp_path):
+    """PROTOCOL 3.1: a commit that advances a row names it."""
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    base = _commit(repo, "file the first matter", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | - | - | filed |")})
+    head = _commit(repo, "start working on it", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | session-A | - | filed; claimed |")})
+    r = run_check("check_commit_ids.py", "--base", base, "--head", head, cwd=repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "advances UB-101" in r.stdout and "no id" in r.stdout, r.stdout
+
+
+def test_commit_ids_green_advance_with_citation(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    base = _commit(repo, "file the first matter", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | - | - | filed |")})
+    head = _commit(repo, "UB-101: claim it for session-A", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | session-A | - | filed; claimed |")})
+    r = run_check("check_commit_ids.py", "--base", base, "--head", head, cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # Non-vacuity: a run that examined no ledger-touching commit would also
+    # exit 0. Exactly one commit in this range touches the ledger.
+    assert "1 ledger-touching commit(s)" in r.stdout, r.stdout
+
+
+def test_commit_ids_red_message_cites_a_phantom_id(tmp_path):
+    """The citation surface check_phantom_ids.py cannot reach: a commit
+    MESSAGE is not a tracked file, so a fabricated number in one was the last
+    place a phantom could hide."""
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    base = _commit(repo, "file the first matter", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | - | - | filed |")})
+    head = _commit(repo, "UB-101: claim it, per the decision in UB-999",
+                   {"DOCKET.md": _ledger(
+                       "| UB-101 | OPEN | a matter | symptom | session-A | - | filed; claimed |")})
+    r = run_check("check_commit_ids.py", "--base", base, "--head", head, cwd=repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "cites UB-999" in r.stdout and "no such row" in r.stdout, r.stdout
+
+
+def test_commit_ids_green_filing_a_row_needs_no_citation(tmp_path):
+    """GREEN twin, and a rule rather than a convenience: under Mode B a
+    session files with UB-ID-PENDING, which has no number to cite. Adding a
+    row is not advancing one (PROTOCOL 3.1). Without this carve-out the
+    commit that installs the starter ledger would fail every adopter's first
+    build -- the very defect class v0.2 exists to close."""
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    base = _commit(repo, "add the ledger", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | - | - | filed |")})
+    head = _commit(repo, "file two more matters, no numbers yet",
+                   {"DOCKET.md": _ledger(
+                       "| UB-101 | OPEN | a matter | symptom | - | - | filed |",
+                       "| UB-ID-PENDING | OPEN | second | symptom | - | - | filed |",
+                       "| UB-ID-PENDING | OPEN | third | symptom | - | - | filed |")})
+    r = run_check("check_commit_ids.py", "--base", base, "--head", head, cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "1 ledger-touching commit(s)" in r.stdout, r.stdout
+
+
+def test_commit_ids_says_not_run_rather_than_pass_on_an_unusable_base(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    head = _commit(repo, "add the ledger", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | - | - | filed |")})
+    r = run_check("check_commit_ids.py", "--base", "0" * 40, "--head", head, cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NOT RUN" in r.stdout and "PASS" not in r.stdout, r.stdout
+
+
+def test_commit_ids_unreadable_head_ledger_is_loud(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    base = _commit(repo, "add the ledger", {"DOCKET.md": _ledger(
+        "| UB-101 | OPEN | a matter | symptom | - | - | filed |")})
+    head = _commit(repo, "UB-101: a hand edit lost a leading pipe",
+                   {"DOCKET.md": _ledger(
+                       "| UB-101 | OPEN | a matter | symptom | S | - | filed |",
+                       "UB-102 | OPEN | mangled | symptom | - | - | filed |")})
+    r = run_check("check_commit_ids.py", "--base", base, "--head", head, cwd=repo)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "unreadable" in (r.stdout + r.stderr).lower()
+
+
+# ----------------------------------------------------- closure references
+
+def test_closure_refs_green_real_reachable_commit(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    sha = _commit(repo, "do the work", {"work.txt": "done\n"})
+    _commit(repo, "close it", {"DOCKET.md": _ledger(
+        f"| UB-101 | DONE | a matter | symptom | - | - | closed by commit {sha[:7]} |")})
+    r = run_check("check_closure_references.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # Non-vacuity: a ledger with no DONE rows would also exit 0.
+    assert "1 DONE row(s)" in r.stdout, r.stdout
+
+
+def test_closure_refs_red_no_hash_at_all(tmp_path):
+    """PROTOCOL 6.2: "done" is not a closure."""
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "close it", {"DOCKET.md": _ledger(
+        "| UB-101 | DONE | a matter | symptom | - | - | done, handled, fixed |")})
+    r = run_check("check_closure_references.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no commit hash" in r.stdout, r.stdout
+
+
+def test_closure_refs_red_hash_that_does_not_resolve(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "close it", {"DOCKET.md": _ledger(
+        "| UB-101 | DONE | a matter | symptom | - | - | closed by commit deadbee |")})
+    r = run_check("check_closure_references.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "none resolves" in r.stdout, r.stdout
+
+
+def test_closure_refs_red_commit_exists_but_is_unreachable(tmp_path):
+    """THE reachability arm, and the reason this check does more than
+    `cat-file -e`. DO NOT COLLAPSE INTO the not-resolving test above.
+
+    Protects: the half that catches a dangled citation after a history
+    rewrite -- this repository's own experience, where closure notes pointed
+    at commits that still EXISTED in the object database but had left the
+    project's history. Existence alone would have reported every one of them
+    fine. The assertions below prove the distinction is real by showing
+    `cat-file -e` SUCCEEDING on the very hash the check rejects."""
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "seed", {"README.md": "x\n"})
+    _g(repo, "checkout", "-q", "-b", "side")
+    orphan = _commit(repo, "work that later left history", {"side.txt": "x\n"})
+    _g(repo, "checkout", "-q", "main")
+    _g(repo, "branch", "-qD", "side")
+
+    # The object is still there -- existence alone would bless this citation.
+    assert _g(repo, "cat-file", "-e", f"{orphan}^{{commit}}",
+              check=False).returncode == 0, "fixture no longer reproduces the class"
+    assert _g(repo, "merge-base", "--is-ancestor", orphan, "HEAD",
+              check=False).returncode != 0, "the orphan is still reachable"
+
+    _commit(repo, "close it", {"DOCKET.md": _ledger(
+        f"| UB-101 | DONE | a matter | symptom | - | - | closed by commit {orphan[:7]} |")})
+    r = run_check("check_closure_references.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "none resolves to a commit reachable" in r.stdout, r.stdout
+
+
+def test_closure_refs_wontfix_is_exempt_while_done_is_not(tmp_path):
+    """GREEN twin for the WONTFIX exemption, carried in a ledger that ALSO
+    holds a properly-cited DONE row -- so the pass cannot come from the
+    checker examining nothing. If the exemption were widened to cover DONE,
+    test_closure_refs_red_no_hash_at_all goes green and catches it."""
+    repo = _init_repo(tmp_path / "r")
+    sha = _commit(repo, "do the work", {"work.txt": "done\n"})
+    _commit(repo, "close one, decline the other", {"DOCKET.md": _ledger(
+        "| UB-101 | WONTFIX | not doing this | symptom | - | - | declined 2026-08-04, no commit to cite |",
+        f"| UB-102 | DONE | a matter | symptom | - | - | closed by commit {sha[:7]} |")})
+    r = run_check("check_closure_references.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "1 DONE row(s)" in r.stdout, r.stdout
+
+
+def test_closure_refs_foreign_hash_plus_one_local_passes(tmp_path):
+    """Closure notes legitimately cite commits in OTHER repositories. One
+    local reachable commit is the requirement; a sibling project's hash
+    beside it is context, not a failure."""
+    repo = _init_repo(tmp_path / "r")
+    sha = _commit(repo, "do the work", {"work.txt": "done\n"})
+    _commit(repo, "close it", {"DOCKET.md": _ledger(
+        f"| UB-101 | DONE | cross-link the sibling | symptom | - | - | "
+        f"sibling side landed as 31349a2 (their repo); closed here by commit {sha[:7]} |")})
+    r = run_check("check_closure_references.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_closure_refs_unreadable_row_is_loud(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    _commit(repo, "close it", {"DOCKET.md": _ledger(
+        "| UB-101 | DONE | a matter | symptom | - | - | closed by commit abc1234 |",
+        "UB-102 | DONE | mangled, uncited | symptom | - | - | done |")})
+    r = run_check("check_closure_references.py", "DOCKET.md", cwd=repo)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "unreadable" in (r.stdout + r.stderr).lower()

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.2 - 2026-08-04
+
+An integrity release. Every item came from an external review of v0.1, and every one was re-verified against the files before it was accepted.
+
+**The quick start was broken, and that was the release blocker.** `install-hooks.sh` copied three files into `.docket-checks/` while the CI workflow it told you to copy invoked five checks under `checks/` plus the suite under `tests/`. Each artifact was internally consistent; only their intersection was wrong, which is exactly why reading either one alone missed it. An adopter who followed the README exactly got a red first build.
+- `templates/install.sh` replaces `install-hooks.sh` (renamed: it now installs more than hooks, and a file whose name understates what it does is how this defect started). One command places `checks/` and `tests/` whole, the hook, the workflow, a starter ledger and the `.gitattributes` stanza — then runs the checks it just installed. It refuses rather than overwrite anything of yours, and leaves an existing `DOCKET.md` alone.
+- The guard is `test_installed_workflow_paths_all_resolve`: it runs the real installer into a scratch repo, extracts every path the INSTALLED workflow invokes, and asserts each is on disk — plus a negative control that neuters the installer and requires the guard to go red. The neutered installer still exits 0, which is the point: a broken install reporting success is the original bug.
+- The README's known-gap disclosure is gone, deleted in the same change that made it false. It had also been published **three times verbatim** — a copy-paste fault in v0.1's own correction commit.
+
+**State-transition CI only ever examined the final parent edge.** `fetch-depth: 2` and `HEAD~1` compare one edge. A `DONE`→`OPEN` in the middle of a multi-commit push, tidied before the tip, is invisible: both ends agree and nobody is told.
+- `checks/check_state_transitions_range.py` walks every parent→child edge in the push or PR range, merges included (a bad conflict resolution reopens a row with no authored commit saying so). CI now checks out with `fetch-depth: 0` and resolves the real range. The checker itself was sound and is unchanged; only the range handed to it was wrong.
+- Armed both ways, including a negative control that runs the OLD endpoint comparison over the same history and requires it to report clean — so the test proves range-awareness is what catches it.
+
+**Two protocol rules had no mechanical check.** Both are now enforced, and both found a real defect in this repo's own ledger on their first run.
+- `checks/check_closure_references.py` (§6.1/6.2): a `DONE` row must cite a commit that resolves **and is reachable from HEAD**. Reachability, not existence, is the load-bearing half — rewriting this repository's history before publication left every closure note pointing at commits that still lived in git's object store but had left the project's history. On its first run it caught two rows: one citing only sibling-repository hashes that cannot resolve here, one citing nothing at all. Both now name the commit that actually closed them. `WONTFIX` is exempt.
+- `checks/check_commit_ids.py` (§3.1/3.3): a commit that advances a row names it, and a number in a commit message has a row behind it. A commit message is not a tracked file, so it was the one citation surface `check_phantom_ids.py` could never read. Filing a row is explicitly not advancing one — under Mode B a filing has no number to cite yet.
+
+**PROTOCOL rulings.**
+- New §2.3: **work begins after reconciliation, not on a pending row.** A pending row cannot be claimed (the claim check must exclude the shared sentinel) and cannot be cited (there is no number), which puts §3.1 out of reach for the whole of that work. Filing still does not wait.
+- New §5.4 (range-aware transitions) and enforcement pointers added to §3.1, §3.3, §6.1.
+- Two sections were both numbered **4.4**; the second is now 4.5.
+
+**Not built, deliberately.** The atomic claim-acquisition protocol remains specified in §4.4 and unbuilt. It needs a network round trip and a shared coordination branch, and it should not exist until someone measurably hits the collision it prevents.
+
+**Also:** CI badge in the README; the starter ledger no longer ships a `DONE` row citing a sample hash, which would have failed every adopter's first closure check; diagram and counts updated (eight checks, seven in CI).
+
 ## v0.1 - 2026-08-03
 
 Initial public version, re-authored from the origin system's in-production ledger discipline (no origin content copied).
