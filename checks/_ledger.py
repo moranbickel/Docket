@@ -65,11 +65,15 @@ def parse_rows(path: Path) -> list[Row]:
 
 
 def _data_shaped(line: str) -> bool:
-    """A pipe-line that should have been a row: not the separator, not the
-    column-header line (which starts `| id |` by protocol field order)."""
+    """A line that should have been a row: a pipe-prefixed line that is not
+    the separator or the column-header line (which starts `| id |` by
+    protocol field order) -- OR any line carrying a row's pipe density
+    (>= 3 pipes) even without its leading pipe, so a hand-edit or a bad
+    conflict resolution that strips the first character still reads as
+    'unreadable rows', never as 'nothing filed yet'."""
     s = line.strip()
     if not s.startswith("|"):
-        return False
+        return s.count("|") >= 3
     if _SEP_RE.match(s):
         return False
     first_cell = s.strip("|").split("|", 1)[0].strip().lower()

@@ -336,6 +336,33 @@ def test_wrong_prefix_still_loud_after_empty_carveout(tmp_path):
     assert r.returncode == 2, r.stdout + r.stderr
 
 
+def test_leading_pipe_stripped_row_is_still_loud(tmp_path):
+    """R4 probe: a row that lost its LEADING pipe (hand edit, bad conflict
+    resolution) is neither parseable nor '|'-prefixed -- the empty-ledger
+    carve-out must not swallow it as 'nothing filed yet'. Any line still
+    carrying a row's pipe density is data-shaped, leading pipe or not."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text(EMPTY_LEDGER +
+                 "UB-101 | OPEN | lost its leading pipe | symptom | - | - | filed |\n",
+                 encoding="utf-8")
+    r = run_check("check_duplicate_ids.py", str(l))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "zero rows" in r.stdout.lower()
+
+
+def test_prose_with_a_stray_pipe_is_not_data_shaped(tmp_path):
+    """GREEN twin of the pipe-density arm: ordinary header prose containing a
+    pipe or two must not trip the guard."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text("# DOCKET\n\n> notes may mention a | character or even a|b here\n\n"
+                 "| id | state | title | scope | owner | blocked-by | notes |\n"
+                 "|----|-------|-------|-------|-------|------------|-------|\n"
+                 "| UB-101 | OPEN | real row | symptom | - | - | filed |\n",
+                 encoding="utf-8")
+    r = run_check("check_duplicate_ids.py", str(l))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_prefix_rename_single_site_is_complete(tmp_path):
     """R3-C-1: renaming the id prefix must be a ONE-SITE edit (ID_PREFIX in
     checks/_ledger.py) after which the whole check suite works against the
