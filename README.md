@@ -2,8 +2,6 @@
 
 **A numbered, in-repo work ledger for concurrent AI coding sessions — file it, claim it, close it on the record. Built for Claude Code / multi-agent workflows.**
 
-<!-- DRAFT-FOR-OPERATOR-EDIT (unedited as of 2026-08-03): the opening paragraph below has NOT yet received the operator's edit. His edited version is canonical; do not polish his edit back. He removes this marker when he makes that edit, before push. -->
-
 I'm a litigator. Every court I've ever worked in runs on a docket: a numbered list of matters, one number per matter, for life. Nobody argues about which case is which. Nobody opens a second file for a case that already has one. When I started running several AI coding sessions against the same repository, I gave them the same thing — one plain-text file where every piece of work gets a number, the number never changes, and everything that happens to that work happens on the record, under that number. This repo is that file, the rules for writing to it, and the checks that keep it honest.
 
 ---
