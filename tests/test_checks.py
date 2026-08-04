@@ -76,7 +76,7 @@ def test_duplicate_ids_zero_parsed_rows_is_not_a_pass(tmp_path):
         encoding="utf-8")
     r = run_check("check_duplicate_ids.py", str(l))
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "zero rows" in r.stdout.lower()
+    assert "unreadable" in r.stdout.lower()
     assert "PASS" not in r.stdout
 
 
@@ -229,7 +229,7 @@ def test_claim_collision_zero_parse_staged_is_loud(tmp_path):
     subprocess.run(["git", "add", "DOCKET.md"], cwd=repo, check=True)
     r = run_check("check_claim_collision.py", "DOCKET.md", cwd=repo)
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "zero rows" in (r.stdout + r.stderr).lower()
+    assert "unreadable" in (r.stdout + r.stderr).lower()
 
 
 def test_claim_collision_green_release(tmp_path):
@@ -254,7 +254,7 @@ def test_phantom_ids_zero_parse_ledger_is_loud(tmp_path):
     subprocess.run(["git", "commit", "-qm", "renamed"], cwd=repo, check=True)
     r = run_check("check_phantom_ids.py", "DOCKET.md", cwd=repo)
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "zero rows" in (r.stdout + r.stderr).lower()
+    assert "unreadable" in (r.stdout + r.stderr).lower()
 
 
 def test_state_transitions_zero_parse_is_loud(tmp_path):
@@ -268,7 +268,7 @@ def test_state_transitions_zero_parse_is_loud(tmp_path):
                    encoding="utf-8")
     r = run_check("check_state_transitions.py", "--old", str(old), "--new", str(new))
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "zero rows" in (r.stdout + r.stderr).lower()
+    assert "unreadable" in (r.stdout + r.stderr).lower()
 
 
 def test_pending_markers_zero_parse_is_loud(tmp_path):
@@ -279,7 +279,7 @@ def test_pending_markers_zero_parse_is_loud(tmp_path):
                  encoding="utf-8")
     r = run_check("check_pending_markers.py", str(l))
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "zero rows" in (r.stdout + r.stderr).lower()
+    assert "unreadable" in (r.stdout + r.stderr).lower()
 
 
 # ---------------------------------------------------------- pending markers
@@ -326,7 +326,7 @@ def test_empty_header_only_ledger_is_not_an_error(tmp_path):
 def test_wrong_prefix_still_loud_after_empty_carveout(tmp_path):
     """NEGATIVE CONTROL FOR the R3-I-1 carve-out. DO NOT DELETE AS REDUNDANT.
     Protects: the zero-parse guard's RED arm after the empty-ledger exemption.
-    Without it, zero_parse could be loosened to 'always False' -- every
+    Without it, unreadable_rows could be loosened to 'always []' -- every
     empty-ledger test above would still pass, and the wrong-prefix trap the
     guard exists for would return silently."""
     l = tmp_path / "DOCKET.md"
@@ -347,20 +347,60 @@ def test_leading_pipe_stripped_row_is_still_loud(tmp_path):
                  encoding="utf-8")
     r = run_check("check_duplicate_ids.py", str(l))
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "zero rows" in r.stdout.lower()
+    assert "unreadable" in r.stdout.lower()
 
 
-def test_prose_with_a_stray_pipe_is_not_data_shaped(tmp_path):
-    """GREEN twin of the pipe-density arm: ordinary header prose containing a
-    pipe or two must not trip the guard."""
+def test_prose_with_pipes_on_an_empty_ledger_is_not_loud(tmp_path):
+    """GREEN twin of the row-shape guard, on an EMPTY ledger so nothing else
+    can carry the assertion.
+
+    R4-I-1: the previous version of this test put the prose line in a ledger
+    that ALSO held a real parsed row -- so it passed under any threshold
+    (proven by mutation: dropping the pipe count to >=1 left it green). The
+    fixture now confounds nothing: zero rows filed, prose with four pipes
+    and prose naming the state words, and the checks must still be quiet."""
     l = tmp_path / "DOCKET.md"
-    l.write_text("# DOCKET\n\n> notes may mention a | character or even a|b here\n\n"
-                 "| id | state | title | scope | owner | blocked-by | notes |\n"
-                 "|----|-------|-------|-------|-------|------------|-------|\n"
-                 "| UB-101 | OPEN | real row | symptom | - | - | filed |\n",
-                 encoding="utf-8")
+    l.write_text(
+        "# DOCKET\n\n"
+        "> a row reads: id | state | title | scope, and a state is OPEN or DONE\n"
+        "> notes may mention a | character or even a|b|c|d here\n\n"
+        "| id | state | title | scope | owner | blocked-by | notes |\n"
+        "|----|-------|-------|-------|-------|------------|-------|\n",
+        encoding="utf-8")
+    for script in ("check_duplicate_ids.py", "check_pending_markers.py"):
+        r = run_check(script, str(l))
+        assert r.returncode == 0, f"{script}: {r.stdout}{r.stderr}"
+
+
+def test_unreadable_row_beside_good_rows_is_loud(tmp_path):
+    """R4-C-1: the guard must fire on ANY row-shaped line that failed to
+    parse -- not only when the whole file parses to zero rows. One good row
+    used to mask every broken sibling, so a duplicate, a pending row, a
+    claim theft and a silent reopen all hid behind a clean PASS."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text(
+        "| UB-101 | OPEN | good row | symptom | - | - | filed |\n"
+        "UB-102 | OPEN | lost its leading pipe | symptom | - | - | filed |\n",
+        encoding="utf-8")
     r = run_check("check_duplicate_ids.py", str(l))
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert ":2" in r.stdout, r.stdout
+
+
+def test_unreadable_row_hides_nothing_from_the_other_checks(tmp_path):
+    """R4-C-1, the same defect through the checks the reviewer proved blind:
+    a broken sibling row must not let a real duplicate / a real pending row
+    slip past while other rows parse."""
+    l = tmp_path / "DOCKET.md"
+    l.write_text(
+        "| UB-101 | OPEN | good row | symptom | - | - | filed |\n"
+        "UB-101 | OPEN | duplicate, unparseable | symptom | - | - | filed |\n"
+        "UB-ID-PENDING | OPEN | pending, unparseable | symptom | - | - | filed |\n",
+        encoding="utf-8")
+    for script, args in (("check_duplicate_ids.py", []),
+                         ("check_pending_markers.py", ["--reconcile"])):
+        r = run_check(script, str(l), *args)
+        assert r.returncode == 2, f"{script} returned {r.returncode}: {r.stdout}"
 
 
 def test_prefix_rename_single_site_is_complete(tmp_path):

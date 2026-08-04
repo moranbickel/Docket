@@ -64,29 +64,42 @@ def parse_rows(path: Path) -> list[Row]:
     return parse_rows_text(path.read_text(encoding="utf-8"))
 
 
-def _data_shaped(line: str) -> bool:
-    """A line that should have been a row: a pipe-prefixed line that is not
-    the separator or the column-header line (which starts `| id |` by
-    protocol field order) -- OR any line carrying a row's pipe density
-    (>= 3 pipes) even without its leading pipe, so a hand-edit or a bad
-    conflict resolution that strips the first character still reads as
-    'unreadable rows', never as 'nothing filed yet'."""
+def _row_shaped(line: str) -> bool:
+    """Is this line a ledger ROW by shape, whatever its id says?
+
+    The test is the state column: cell 2 is one of the five states, cell 1
+    is a single space-free token (an id, however spelled), and the line has
+    a row's cell count. That reads a row whose id prefix was renamed, whose
+    id is mangled, or whose leading pipe was stripped by a hand edit -- all
+    of which MUST count as rows that failed to parse.
+
+    It deliberately does not key on pipe density: ordinary prose carrying
+    pipes ("id | state | title | scope", "a|b|c|d") has a multi-word first
+    cell or no state in cell 2, so it is not row-shaped. The separator and
+    the `| id | state | ...` header line are excluded the same way."""
     s = line.strip()
-    if not s.startswith("|"):
-        return s.count("|") >= 3
-    if _SEP_RE.match(s):
+    if s.count("|") < 2 or _SEP_RE.match(s):
         return False
-    first_cell = s.strip("|").split("|", 1)[0].strip().lower()
-    return first_cell != "id"
+    body = s[1:] if s.startswith("|") else s
+    cells = [c.strip() for c in body.split("|")]
+    if len(cells) < 3:
+        return False
+    first = cells[0]
+    return bool(first) and not any(c.isspace() for c in first) \
+        and cells[1].upper() in STATES
 
 
-def zero_parse(text: str) -> bool:
-    """True ONLY in the ambiguous instrument state: the text carries
-    data-shaped table lines, yet zero of them parse (renamed id prefix,
-    mangled table). A correctly-shaped table with no rows filed yet is a
-    LEGITIMATE empty ledger, not this state -- checks proceed over zero
-    rows and say so. Every check treats True as exit 2, never success: a
-    run over unreadable rows has measured nothing."""
-    if parse_rows_text(text):
-        return False
-    return any(_data_shaped(l) for l in text.splitlines())
+def unreadable_rows(text: str) -> list[int]:
+    """Line numbers of row-shaped lines that did NOT parse.
+
+    Non-empty means the instrument is reading a ledger it cannot fully
+    read: every check treats it as exit 2, never success. This is per-ROW,
+    not per-file -- one good row must never mask a broken sibling, because
+    a check that skips the line it cannot parse reports a clean PASS over a
+    duplicate, a pending row, or a claim theft sitting in that very line.
+
+    A correctly-shaped table with no rows filed yet returns [] -- an empty
+    ledger is legitimate, and the checks proceed over zero rows and say so."""
+    parsed = {r.line_no for r in parse_rows_text(text)}
+    return [n for n, line in enumerate(text.splitlines(), start=1)
+            if n not in parsed and _row_shaped(line)]

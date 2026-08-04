@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import PENDING_ID, parse_rows, zero_parse  # noqa: E402
+from _ledger import PENDING_ID, parse_rows, unreadable_rows  # noqa: E402
 
 TERMINAL = ("DONE", "WONTFIX")
 TOKEN = "reopened:"
@@ -33,11 +33,12 @@ def main(argv: list[str]) -> int:
         print("[state-transitions] ERROR: old/new ledger file missing", file=sys.stderr)
         return 2
     for label, f in (("old", old_f), ("new", new_f)):
-        if zero_parse(f.read_text(encoding="utf-8")):
-            print(f"[state-transitions] ERROR: {label} ledger {f} is non-empty "
-                  f"but parses to zero rows -- wrong id prefix or malformed "
-                  f"table. A comparison of nothing with nothing certifies "
-                  f"nothing.")
+        bad = unreadable_rows(f.read_text(encoding="utf-8"))
+        if bad:
+            print(f"[state-transitions] ERROR: {label} ledger {f} has "
+                  f"{len(bad)} unreadable row(s) at line(s) "
+                  f"{', '.join(map(str, bad))} -- a silent reopen on one of "
+                  f"them would compare as absent on both sides.")
             return 2
 
     old = {r.id: r for r in parse_rows(old_f) if r.id != PENDING_ID}

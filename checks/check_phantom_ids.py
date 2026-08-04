@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import CITE_RE, ID_PREFIX, PENDING_ID, parse_rows, zero_parse  # noqa: E402
+from _ledger import CITE_RE, ID_PREFIX, PENDING_ID, parse_rows, unreadable_rows  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -40,10 +40,12 @@ def main(argv: list[str]) -> int:
         if not p.is_file():
             print(f"[phantom-ids] ERROR: no such ledger: {p}", file=sys.stderr)
             return 2
-        if zero_parse(p.read_text(encoding="utf-8")):
-            print(f"[phantom-ids] ERROR: {p} is non-empty but parses to zero "
-                  f"rows -- wrong id prefix or malformed table. Refusing to "
-                  f"report success over nothing.")
+        bad = unreadable_rows(p.read_text(encoding="utf-8"))
+        if bad:
+            print(f"[phantom-ids] ERROR: {p} has {len(bad)} unreadable row(s) "
+                  f"at line(s) {', '.join(map(str, bad))} -- an id minted on "
+                  f"one of them would read as a phantom citation everywhere "
+                  f"else. Refusing to report success.")
             return 2
         minted |= {r.id for r in parse_rows(p) if r.id != PENDING_ID}
 

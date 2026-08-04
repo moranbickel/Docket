@@ -19,7 +19,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ledger import PENDING_ID, parse_rows, zero_parse  # noqa: E402
+from _ledger import PENDING_ID, parse_rows, unreadable_rows  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -34,12 +34,17 @@ def main(argv: list[str]) -> int:
         if not path.is_file():
             print(f"[duplicate-ids] ERROR: no such ledger: {path}", file=sys.stderr)
             return 2
-        rows = parse_rows(path)
-        if not rows and zero_parse(path.read_text(encoding="utf-8")):
-            print(f"[duplicate-ids] ERROR: {path} carries table lines that "
-                  f"parse to zero rows -- wrong id prefix or malformed table. "
-                  f"Refusing to report success over unreadable rows.")
+        bad = unreadable_rows(path.read_text(encoding="utf-8"))
+        if bad:
+            for n in bad:
+                print(f"[duplicate-ids] ERROR: {path}:{n} is a row this check "
+                      f"cannot read -- wrong id prefix, mangled id, or a lost "
+                      f"leading pipe.")
+            print(f"[duplicate-ids] Refusing to report success while {len(bad)} "
+                  f"row(s) are unreadable: whatever is on those lines -- a "
+                  f"duplicate, a claim, a pending marker -- was not checked.")
             return 2
+        rows = parse_rows(path)
         total_rows += len(rows)
         for r in rows:
             if r.id != PENDING_ID:
