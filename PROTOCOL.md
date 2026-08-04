@@ -72,7 +72,9 @@ Mode B is the one proven in the origin system. Its failure mode is known and mec
 
 4.2. The pre-commit check (`check_claim_collision.py`) **MUST** reject a commit that changes a row's owner from one non-`-` value to a different non-`-` value. Releasing a claim (owner → `-`) is always allowed.
 
-4.3. This is the defense against the dominant multi-session failure — two sessions building the same item in parallel and merging both. The claim is cheap; the duplicate work it prevents is not.
+4.3. **What this does and does not guarantee.** The check compares the staged ledger against the committing session's own `HEAD`. It therefore catches a row being taken from an owner that session can see — claim *takeover*. It does **not** serialize first acquisition: two sessions branching from the same `-` row each see `-`, each write their own name, and both commits pass. The no-union rule (§7) makes that pair conflict loudly at the merge, so the ledger never silently carries two owners — but the duplicate work has already happened by then.
+
+4.4. Stated plainly, because a guard whose limits are unstated will be trusted past them: **mutual exclusion before work requires a shared serialization point, and this protocol does not have one.** If you need it, the shape is a claim-only commit that must land on a designated coordination branch before implementation begins, with a rejected non-fast-forward push meaning "refresh and retry". That is deliberately NOT specified here and NOT built: it adds a network round trip and a shared branch to a single-file protocol, and it should not exist until someone hits the collision often enough to measure it.
 
 4.4. The check resolves the repository root **from the worktree the commit is happening in** (`git rev-parse --show-toplevel` at hook time). It **MUST NOT** read the root from an environment variable: with several worktrees live, an env var set by one session silently points another session's hook at the wrong ledger, and the hook passes while guarding nothing.
 

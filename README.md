@@ -23,7 +23,7 @@ The common root: a work ledger is not prose. It is a set of numbered records, an
 - **One file, one line per matter.** Each line starts with its number (`UB-1023`), then a state — `OPEN`, `PARTIAL`, `DONE`, `BLOCKED`, `WONTFIX` — then title, scope, owner, and notes.
 - **Numbers are for life.** Never reused, never renumbered. Reopening a `DONE` item requires a written note saying why — regressions reopen loudly, never silently.
 - **The number travels.** It appears verbatim in the commit message, the PR title, the review, and the closing note. Finding everything about item 1023 is `git grep UB-1023`.
-- **Claims before work.** A session writes itself into the row's owner field before touching the work. A pre-commit check blocks a second claim, which is the defense against the dominant multi-session failure: two sessions building the same thing.
+- **Claims before work.** A session writes itself into the row's owner field before touching the work. A pre-commit check rejects a commit that takes a row away from whoever already holds it in that session's history. Read the exact guarantee before you rely on it: it catches a *claim being taken over*, not two sessions branching from the same unclaimed row at the same moment — that pair collides at the merge, loudly, but by then both have done the work. No local hook can promise otherwise without a shared serialization point, and this protocol does not have one.
 - **Closing cites the work.** A `DONE` row names the commit(s) that closed it. A closure that points at nothing is not a closure.
 - **Same-row edits must conflict.** The one git setting that matters: this file must **never** be configured for automatic union merges. If two sessions edit the same row, you want the conflict.
 
@@ -78,6 +78,12 @@ This is the file the other protocols stand on. [CSAE](https://github.com/moranbi
 ## The checks
 
 Every check in [`checks/`](./checks/) ships with a pair of cases in [`tests/`](./tests/): one it must fail and one it must pass. A checker that has never been seen failing has not been seen working.
+
+**Known gap, v0.1 (fixed in the next release):** the quick start's `install-hooks.sh` installs the two pre-commit checks only. The CI workflow it tells you to copy runs all five plus the test suite, from `checks/` and `tests/` — so copy those two directories as well, or CI will fail on your first push. The [ledger](./DOCKET.md) carries this and the other v0.2 items as filed rows, which is the only honest place for them.
+
+**Known gap, v0.1 (fixed in the next release):** the quick start's `install-hooks.sh` installs the two pre-commit checks only. The CI workflow it tells you to copy runs all five plus the test suite, from `checks/` and `tests/` — so copy those two directories as well, or CI will fail on your first push. The [ledger](./DOCKET.md) carries this and the other v0.2 items as filed rows, which is the only honest place for them.
+
+**Known gap, v0.1 (fixed in the next release):** the quick start's `install-hooks.sh` installs the two pre-commit checks only. The CI workflow it tells you to copy runs all five plus the test suite, from `checks/` and `tests/` — so copy those two directories as well, or CI will fail on your first push. The [ledger](./DOCKET.md) carries this and the other v0.2 items as filed rows, which is the only honest place for them.
 
 | Check | Catches | When |
 |---|---|---|
