@@ -47,9 +47,14 @@ arms them, the pre-commit hook, the CI workflow, a starter ledger and the
 you what passed. It refuses rather than overwrite anything of yours, leaves
 an existing `DOCKET.md` alone, and is safe to re-run.
 
-Budget a few minutes: the last thing it does is run the fixture suite, which
-builds a scratch git repository per case. That is the install proving itself
-rather than asserting itself, and it is the only slow part.
+The last thing it does is run the fixture suite, which builds a scratch git
+repository per case — the install proving itself rather than asserting itself.
+That costs about **4 seconds on Linux or macOS**, and about **14 minutes on
+Windows**, where each git subprocess is dramatically more expensive (both
+figures measured, same 52 cases). If you are on Windows and would rather not
+wait, interrupt after the checks report clean and run
+`python -m pytest tests/test_checks.py` when it suits you — but do run it,
+because it is the only thing that shows those checks can fail.
 
 If you would rather do it by hand, copy `checks/` and `tests/` whole,
 `.github/workflows/ledger-ci.yml`, and `templates/DOCKET.md` — whole is the

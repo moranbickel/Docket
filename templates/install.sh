@@ -152,8 +152,9 @@ elif "$PY" -m pytest --version >/dev/null 2>&1; then
   # case and takes minutes, most of them on Windows -- and a long quiet step
   # is indistinguishable from a hung one, which is how a healthy process gets
   # killed and restarted on top of itself.
-  echo "docket: running the fixture suite that arms these checks -- this"
-  echo "docket:   builds a scratch git repo per case and takes a few minutes."
+  echo "docket: running the fixture suite that arms these checks. It builds a"
+  echo "docket:   scratch git repo per case: ~4s on Linux/macOS, ~14min on"
+  echo "docket:   Windows, where git subprocesses are far more expensive."
   "$PY" -m pytest tests/test_checks.py -q
   echo "docket: OK -- checks ran clean and the fixture suite passed."
 else
