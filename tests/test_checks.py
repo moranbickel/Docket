@@ -641,6 +641,32 @@ def test_installer_refuses_to_clobber_a_differing_file(tmp_path):
         encoding="utf-8") == "# mine, not yours\n"
 
 
+def test_installing_twice_does_not_duplicate_the_gitattributes_rule(tmp_path):
+    """Idempotence, and a real defect this caught.
+
+    The first version keyed its "already installed" test on the stanza's own
+    comment text. Run against a repo that had written its OWN equivalent rule
+    -- as this repository had -- the marker was absent, the stanza was
+    appended anyway, and `.gitattributes` ended up declaring `DOCKET.md text
+    eol=lf` twice. Found by running the installer against Docket itself.
+
+    Both arms live here: a repo with a pre-existing hand-written rule must be
+    left alone, and two consecutive installs must leave exactly one rule."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {
+        "README.md": "an adopter repo\n",
+        ".gitattributes": "# my own rule, written by hand\nDOCKET.md text eol=lf\n"})
+
+    for _ in range(2):
+        r = _run_installer(INSTALLER, target)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    attrs = (target / ".gitattributes").read_text(encoding="utf-8")
+    rules = [ln for ln in attrs.splitlines()
+             if ln.strip().startswith("DOCKET.md")]
+    assert len(rules) == 1, f"ledger rule declared {len(rules)} times:\n{attrs}"
+
+
 def test_installer_leaves_an_existing_ledger_alone(tmp_path):
     """A repo that already keeps a docket must not have it replaced by the
     starter. Three sample rows overwriting live work would be the most

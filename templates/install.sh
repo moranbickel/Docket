@@ -80,8 +80,13 @@ else
 fi
 
 # --- .gitattributes stanza --------------------------------------------------
-if grep -q 'Docket ledger' "$TARGET/.gitattributes" 2>/dev/null; then
-  echo "docket: .gitattributes stanza already present"
+# Idempotence keys on whether the LEDGER already has attributes, not on the
+# stanza's own prose. Keying on the prose means a repo that wrote its own
+# equivalent rule -- as this one did -- gets the stanza appended anyway, and
+# ends up declaring `DOCKET.md text eol=lf` twice. Found by running this
+# installer against Docket itself.
+if grep -qE '^[[:space:]]*DOCKET\.md[[:space:]]' "$TARGET/.gitattributes" 2>/dev/null; then
+  echo "docket: .gitattributes already configures DOCKET.md -- left untouched"
 else
   cat "$SRC/templates/gitattributes-stanza" >> "$TARGET/.gitattributes"
   echo "docket: .gitattributes stanza appended"
