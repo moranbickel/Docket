@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Installer and uninstaller, found by walking the quick start on Windows.
+- `templates/uninstall.sh` removes what the installer recorded in an install manifest (kept in the git directory, not the working tree): only files whose content still matches the hash taken at install time, only Docket's marked block in the pre-commit hook (wherever `core.hooksPath` or a linked worktree puts it), only Docket's `.gitattributes` stanza, and only directories the installer created, once empty. Files you changed are left in place with a message. Running it twice is harmless.
+- The installer finds every conflicting file before writing anything, so a refusal leaves the repository untouched.
+- The installer no longer stops half-way on a branch with no commits or on a shallow clone: it skips the closure check, which needs history, says so, and finishes.
+- The installed copy of the suite skips the tests of the installer and uninstaller (they need `templates/`, which is not copied) instead of failing, so the installer's final step passes and it prints its OK line.
+- The installer leaves no bytecode or pytest cache in your tree, and starts its `.gitattributes` and hook blocks on a new line.
+- Replaced the "about 14 minutes on Windows" estimate with a measured statement.
+- The installer refuses a target that is not the repository's top level (exit 2, nothing written); the uninstaller uses the top level and says so, and keeps the manifest until every entry is dealt with.
+- The uninstaller cuts the `.gitattributes` stanza only if it is still exactly as installed (hash stored in the manifest); otherwise it leaves the file alone and says what to remove by hand. It ignores manifest file and directory entries that are absolute or climb out of the repository.
+- The installer's preflight also refuses a directory where a file goes and a file where a directory goes, and recognises its own hook block by its exact marker line rather than the word `docket-checks`. A failure part-way still leaves a manifest.
+- The pre-commit hook no longer leaves `checks/__pycache__` in your tree.
+- On a hook that is this checkout's own, the uninstaller finds it by asking Git where it is now and recognises Docket's block by its exact marker lines, so it still works after the repository directory is renamed or moved; the manifest records the hook path as Git spells it (relative to the repository where Git does), and the hook entry can be cleared. The `.gitattributes` cut removes exactly the one verified block.
+- Shared hooks are refused, not guessed at. With `core.hooksPath` set (any scope) or linked worktrees, the installer installs the files but writes the hook only with `--shared-hook`; the uninstaller refuses the whole uninstall (exit 2, nothing changed) when there is a Docket hook to deal with and it may be shared or is not the one recorded, or carries a Docket block this checkout's manifest did not record writing (written from another worktree, or copied in by hand), prints the manual steps, and continues with `--skip-hook` once no Docket block remains in the hook. This replaces the earlier "find the hook through Git" handling, which could cut or delete a hook another repository relied on.
+- The `.gitattributes` and hook cutters keep the user's CR bytes on Git for Windows' awk (`BINMODE`), and each removes exactly the one verified block and stops.
+
 ## v0.2 - 2026-08-04
 
 An integrity release. Every item came from an external review of v0.1, and every one was re-verified against the files before it was accepted.

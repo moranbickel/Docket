@@ -31,16 +31,20 @@ From the parent of your Docket clone, using a POSIX shell (Git Bash on Windows):
 sh Docket/templates/install.sh /path/to/your-repo
 ```
 
-Step by step, with captured output, the Windows (PowerShell) form, and how to remove it:
-[install, first check, uninstall](examples/QUICKSTART.md).
+Step by step, with captured output and the Windows (PowerShell) form:
+[install, first check, uninstall](examples/QUICKSTART.md). To remove it again, run
+`sh Docket/templates/uninstall.sh /path/to/your-repo`; it removes only what the
+installer recorded, and only files you have not changed.
 
 The installer adds checks, test fixtures, a CI workflow, a pre-commit hook, a
 starter ledger, and Git attributes. Read the [installer](templates/install.sh)
-first. It refuses differing check files and preserves an existing ledger; it
-may append Docket configuration to existing hooks and attributes.
+first. It refuses differing check files (before writing anything) and preserves
+an existing ledger; it may append Docket configuration to existing hooks and
+attributes.
 
 It runs the applicable installed checks and, when pytest is available, the
-fixture suite. The suite can take minutes on Windows. Missing pytest is reported
+fixture suite. The suite takes a few seconds on Linux and noticeably longer on
+Windows. Missing pytest is reported
 as a pending suite, not a test pass. Range and tracked-file checks run in CI.
 
 ## Rules and limits
