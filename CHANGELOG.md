@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Installer and uninstaller, found by walking the quick start on Windows.
+- `templates/uninstall.sh` removes what the installer recorded in an install manifest (kept in the git directory, not the working tree): only files whose content still matches the hash taken at install time, only Docket's marked block in the pre-commit hook (wherever `core.hooksPath` or a linked worktree puts it), only Docket's `.gitattributes` stanza, and only directories the installer created, once empty. Files you changed are left in place with a message. Running it twice is harmless.
+- The installer finds every conflicting file before writing anything, so a refusal leaves the repository untouched.
+- The installer no longer stops half-way on a branch with no commits or on a shallow clone: it skips the closure check, which needs history, says so, and finishes.
+- The installed copy of the suite skips the tests of the installer and uninstaller (they need `templates/`, which is not copied) instead of failing, so the installer's final step passes and it prints its OK line.
+- The installer leaves no bytecode or pytest cache in your tree, and starts its `.gitattributes` and hook blocks on a new line.
+- Replaced the "about 14 minutes on Windows" estimate with a measured statement.
+
 ## v0.2 - 2026-08-04
 
 An integrity release. Every item came from an external review of v0.1, and every one was re-verified against the files before it was accepted.

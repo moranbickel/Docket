@@ -29,15 +29,22 @@ Real output (the first command exits 1, the second exits 0):
 
 ## 1. Install into a project
 
-The target must be a Git repository. It may be brand new: with no commits yet,
-the installer skips the one check that needs a commit to read (closure
-references), says so, and still finishes. Nothing is left half-installed.
+The target must be a Git repository. It may be brand new or a shallow clone:
+where there is no history to read, the installer skips the one check that needs
+it (closure references), says so, and still finishes.
+
+Every precondition that can be checked before writing is checked first: a Git
+worktree, a Python, and no existing file that differs from the one to be
+installed. If any fails, nothing has been written. Once writing has started, the
+remaining steps check your ledger; a failure there reports on the ledger and
+does not undo the install (use the uninstaller below for that).
 
 Read [`templates/install.sh`](../templates/install.sh) before you run it. It
 writes only inside the target repository: `checks/`, `tests/`,
 `.github/workflows/ledger-ci.yml`, `DOCKET.md` (only if absent), a stanza
 appended to `.gitattributes`, and a block appended to the repository's
-`pre-commit` hook. If you have set `core.hooksPath`, the hook goes to that
+`pre-commit` hook. It also writes an install manifest (see Uninstall) inside the
+git directory. If you have set `core.hooksPath`, the hook goes to that
 directory (the installer asks Git where hooks live), which may be shared by
 other repositories; check `git config core.hooksPath` first. It refuses to
 overwrite a differing file.
@@ -72,35 +79,38 @@ docket: verifying -- running the installed single-ledger checks against /path/to
 [closure-refs] PASS: 0 DONE row(s) each cite a commit reachable from HEAD
 docket: running the fixture suite that arms these checks. It builds a
 docket:   scratch git repo per case: a few seconds on Linux/macOS, and
-docket:   about a minute on a Windows 11 machine, where git subprocesses
-docket:   are far more expensive. Be patient; it is not hung.
-..............................sssssssss.................                 [100%]
-47 passed, 9 skipped in 17.65s
+docket:   noticeably longer on Windows, where git subprocesses are far
+docket:   more expensive. Be patient; it is not hung.
+..............................sssssssssssssssssss.................       [100%]
+47 passed, 19 skipped in 39.24s
 docket: OK -- checks ran clean and the fixture suite passed.
 ```
 
-Into a repository with **no commits**, the same install prints the notice below
-in place of the closure line and ends
+Into a repository whose current branch has **no commits yet**, the same install
+prints the notice below in place of the closure line and ends
 `docket: OK -- checks ran clean (closure check skipped: no commits yet) and the fixture suite passed.`
-(exit 0):
+(exit 0, `47 passed, 19 skipped`):
 
 ```text
-docket: NOTICE -- closure check SKIPPED: this repository has no commits yet,
-docket:          so there is no HEAD to resolve closure notes against.
-docket:          It runs in CI, and here once you have made a commit.
+docket: NOTICE -- closure check SKIPPED: the current branch has no commits yet.
+docket:          It runs in CI, and here once there is history to check.
 ```
 
-**The 9 skipped tests** are the tests of the installer itself. They need
-`templates/`, which is not copied into your project, so the installed suite
-skips them with a stated reason instead of failing. They run in the Docket
-clone's own suite.
+In a shallow clone (`git clone --depth 1`) the notice reads `this is a shallow
+clone, where commit reachability cannot be decided` instead.
+
+**The 19 skipped tests** are the tests of the installer and uninstaller
+themselves. They need `templates/`, which is not copied into your project, so
+the installed suite skips them with a stated reason instead of failing. They run
+in the Docket clone's own suite.
 
 **Windows cost.** The suite builds a scratch Git repository per case, and Git
 subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
-install took 28 s into the one-commit repository and 57 s into the empty one;
-Docket's own 56-test suite took 120 s. Expect it to vary with antivirus and
-disk, and do not interrupt it. If pytest is not installed the installer says so
-and reports the suite as pending rather than passed.
+install took between 26 s and 58 s on repeated runs into a one-commit or empty repository. Docket's own
+66-test suite, which also exercises the installer and uninstaller, took 417 s
+(about 7 minutes) there, against a few seconds on Linux. Expect it to vary
+with antivirus and disk, and do not interrupt it. If pytest is not installed
+the installer says so and reports the suite as pending rather than passed.
 
 ## 2. First check in your project
 
@@ -128,21 +138,69 @@ history to compare.
 
 ## 3. Uninstall
 
-There is no uninstall script. The installer's changes are all inside the target
-repository, so removing them is manual. Keep `DOCKET.md` if it holds real rows.
-From the repository root, in a POSIX shell:
+The installer records exactly what it created, with a content hash for each
+file, in `docket-install.manifest` inside the repository's git directory (find
+it with `git rev-parse --git-path docket-install.manifest`; it is not in your
+working tree, so there is nothing to commit). `templates/uninstall.sh` reads that
+manifest. From the directory that contains your Docket clone:
 
 ```sh
-rm -r checks tests .github/workflows/ledger-ci.yml
-sed -i '/^# --- docket-checks/,/^# --- end docket-checks/d' .git/hooks/pre-commit
-sed -i '/^# --- Docket ledger:/,/^# -----*$/d' .gitattributes
+sh Docket/templates/uninstall.sh /path/to/your-repo
 ```
 
-Only run the first line if `checks/` and `tests/` contain nothing of yours; the
-installer refuses to overwrite a differing file, so they held only Docket's
-files if the install succeeded. If `.git/hooks/pre-commit` is left holding only
-`#!/bin/sh`, delete it. Remove `DOCKET.md` as well if you do not want the
-ledger. On Windows, run these in Git Bash. These commands were run against the
-scratch repository from step 1; afterwards only `DOCKET.md` and the original
-files remained, the hook held only its `#!/bin/sh` line, and `.gitattributes`
-was empty.
+Windows PowerShell:
+
+```powershell
+& 'C:\Program Files\Git\bin\sh.exe' Docket/templates/uninstall.sh D:/path/to/your-repo
+```
+
+What it does, and does not do:
+
+- Removes a file only if it is listed in the manifest **and** its content still
+  matches the hash recorded at install time. A Docket file you have edited, and
+  `DOCKET.md` once you have added rows to it, are left in place with a
+  `left in place (changed since install)` message.
+- Never deletes a directory wholesale. Your own files in `checks/` and `tests/`
+  stay; a directory the installer created is removed only once it is empty.
+- Removes only Docket's marked block from the pre-commit hook the installer
+  modified (the path is recorded in the manifest, so `core.hooksPath` and linked
+  worktrees are handled), and deletes the hook only if nothing but a shebang is
+  left. It removes only Docket's stanza from `.gitattributes`.
+- Is safe to run twice: the second run reports that there is nothing to uninstall.
+
+Real output, from a scratch repository whose own `checks/lint_mine.py` and
+`tests/test_mine.py` were committed before the install, with the install itself
+committed afterwards (the per-file `removed` lines between the first and last
+file are omitted here):
+
+```text
+docket: removed checks/check_claim_collision.py
+docket: removed checks/check_closure_references.py
+docket: removed checks/check_commit_ids.py
+...
+docket: removed tests/test_checks.py
+docket: removed .github/workflows/ledger-ci.yml
+docket: removed DOCKET.md
+docket: removed pre-commit hook /path/to/your-repo/.git/hooks/pre-commit (nothing else was in it)
+docket: removed .gitattributes (Docket created it and nothing else was in it)
+docket: removed empty directory tests/fixtures/
+docket: removed empty directory .github/workflows/
+docket: removed empty directory .github/
+docket: uninstalled. Commit the removal if you had committed the install.
+```
+
+Afterwards `ls checks tests` shows only `lint_mine.py` and `test_mine.py`. Because
+the install had been committed, `git status` lists the removed files as deletions;
+committing them succeeds with no hook in the way (`Remove Docket`, exit 0). A
+second run:
+
+```text
+docket: nothing to uninstall -- no install manifest for this working tree (/path/to/your-repo/.git/docket-install.manifest).
+```
+
+Two limits. The hook lives in the repository's shared hooks directory, so
+uninstalling from one linked worktree removes the hook for all of them; the
+installed files are per worktree. And the manifest belongs to this clone: a
+fresh clone of your repository has the committed files but no manifest, so run
+the uninstaller in the clone where you ran the installer, or delete the files
+by hand.

@@ -492,11 +492,21 @@ REPO = Path(__file__).parent.parent
 INSTALLER = REPO / "templates" / "install.sh"
 
 # An adopter repo gets checks/ and tests/ but not templates/, so tests that run
-# the installer cannot run there. They skip with a reason instead of failing.
+# a script from templates/ cannot run there. They skip with a reason instead of
+# failing. `installer_test` applies the skip, tags the test `installer` (so a
+# run can select exactly these), and registers it for the armed-control and
+# the adopter-suite test, which count them exactly.
 _needs_installer = pytest.mark.skipif(
     not INSTALLER.is_file(),
     reason="templates/install.sh is not installed in an adopter repository; "
            "this test exercises the installer itself")
+INSTALLER_TESTS = []
+
+
+def installer_test(fn):
+    INSTALLER_TESTS.append(fn)
+    return pytest.mark.installer(_needs_installer(fn))
+
 
 LEDGER_HEAD = ("| id | state | title | scope | owner | blocked-by | notes |\n"
                "|----|-------|-------|-------|-------|------------|-------|\n")
@@ -566,7 +576,7 @@ def _run_installer(installer: Path, target: Path):
         capture_output=True, text=True, encoding="utf-8")
 
 
-@_needs_installer
+@installer_test
 def test_installed_workflow_paths_all_resolve(tmp_path):
     """THE control for the v0.1 quick-start defect.
 
@@ -600,7 +610,7 @@ def test_installed_workflow_paths_all_resolve(tmp_path):
     assert not absent, f"checks/ did not travel whole: {absent}"
 
 
-@_needs_installer
+@installer_test
 def test_parity_control_fails_when_the_installer_drops_the_suite(tmp_path):
     """NEGATIVE CONTROL FOR test_installed_workflow_paths_all_resolve.
     DO NOT DELETE AS REDUNDANT.
@@ -638,7 +648,7 @@ def test_parity_control_fails_when_the_installer_drops_the_suite(tmp_path):
     assert any(p.startswith("tests/") for p in missing), missing
 
 
-@_needs_installer
+@installer_test
 def test_installer_refuses_to_clobber_a_differing_file(tmp_path):
     """An adopter with their own checks/check_duplicate_ids.py is told, not
     silently overwritten."""
@@ -653,7 +663,7 @@ def test_installer_refuses_to_clobber_a_differing_file(tmp_path):
         encoding="utf-8") == "# mine, not yours\n"
 
 
-@_needs_installer
+@installer_test
 def test_installing_twice_does_not_duplicate_the_gitattributes_rule(tmp_path):
     """Idempotence, and a real defect this caught.
 
@@ -680,7 +690,7 @@ def test_installing_twice_does_not_duplicate_the_gitattributes_rule(tmp_path):
     assert len(rules) == 1, f"ledger rule declared {len(rules)} times:\n{attrs}"
 
 
-@_needs_installer
+@installer_test
 def test_installer_leaves_an_existing_ledger_alone(tmp_path):
     """A repo that already keeps a docket must not have it replaced by the
     starter. Three sample rows overwriting live work would be the most
@@ -696,18 +706,51 @@ def test_installer_leaves_an_existing_ledger_alone(tmp_path):
 
 # ----------------------------------- installed copy and empty-repo behaviour
 
-@_needs_installer
+_IS_DOCKET_SOURCE_TREE = (REPO / "PROTOCOL.md").is_file() and INSTALLER.is_file()
+
+
+@pytest.mark.skipif(
+    not _IS_DOCKET_SOURCE_TREE,
+    reason="not the Docket source tree (PROTOCOL.md and templates/install.sh "
+           "are not both present at the repository root)")
+def test_installer_tests_are_armed_in_the_source_tree():
+    """NEGATIVE CONTROL FOR the skip-when-templates-is-absent marker.
+    DO NOT DELETE AS REDUNDANT.
+
+    Protects: every installer test in Docket's own repository. If the marker's
+    condition were wrongly true here, all of them would skip and the suite
+    would stay green with nobody having run them. This control deliberately
+    does NOT carry that marker (a skippable control skips itself on exactly the
+    defect it guards); it is gated on a signal the installer never copies,
+    PROTOCOL.md, so an adopter repo skips it and this repo cannot.
+
+    It reads the skip conditions off the real decorated functions (the
+    predicate pytest itself consults) and checks collection by asking pytest."""
+    assert INSTALLER_TESTS, "no installer tests registered"
+    for fn in INSTALLER_TESTS:
+        conditions = [m.args[0] for m in fn.pytestmark if m.name == "skipif"]
+        assert conditions, f"{fn.__name__} lost its skip marker"
+        assert not any(conditions), f"{fn.__name__} would be skipped here"
+    collected = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "installer",
+         "-p", "no:cacheprovider", str(Path(__file__))],
+        cwd=REPO, capture_output=True, text=True, encoding="utf-8")
+    ids = [ln for ln in collected.stdout.splitlines() if "::" in ln]
+    assert len(ids) == len(INSTALLER_TESTS), collected.stdout + collected.stderr
+
+
+@installer_test
 def test_installed_suite_passes_in_an_adopter_repo(tmp_path):
     """The installed copy of the installer self-tests must not fail.
 
-    The installer copies checks/ and tests/ but not templates/, and five tests
-    in this file exercise templates/install.sh itself. In an adopter repo they
-    used to fail with "No such file or directory", so the installer's own
-    final step exited 1 and never printed its OK line.
+    The installer copies checks/ and tests/ but not templates/, and every test
+    marked `installer` in this file runs a script from templates/. In an
+    adopter repo they used to fail with "No such file or directory", so the
+    installer's own final step exited 1 and never printed its OK line.
 
-    Protects: the adopter's first run of the installed suite. Without it, the
-    five installer tests could regress to failing in an adopter repo while
-    every other test here stays green, because this repository always has
+    Protects: the adopter's first run of the installed suite. Without it, an
+    installer test could regress to failing in an adopter repo while every
+    other test here stays green, because this repository always has
     templates/ and so never sees the failure. The nested installer run inside
     pytest skips the suite step by design, so the suite is run here directly."""
     target = _init_repo(tmp_path / "adopter")
@@ -719,30 +762,18 @@ def test_installed_suite_passes_in_an_adopter_repo(tmp_path):
     suite = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/test_checks.py", "-q", "-rs",
          "-p", "no:cacheprovider", f"--basetemp={(tmp_path / 'pt').as_posix()}",
-         "-k", "installer or installed or installing or parity"],
+         "-m", "installer"],
         cwd=target, capture_output=True, text=True, encoding="utf-8")
     out = suite.stdout + suite.stderr
     assert suite.returncode == 0, out
-    skipped = _re.search(r"(\d+) skipped", out)
-    # Non-vacuity: five installer tests must have been selected and skipped
-    # (with a reason naming templates/), not silently deselected.
-    assert skipped and int(skipped.group(1)) >= 5, out
+    # Exact, not a lower bound: every registered installer test must have been
+    # selected and skipped (with a reason naming templates/), none deselected.
+    assert f"{len(INSTALLER_TESTS)} skipped" in out, out
+    assert "passed" not in out and "failed" not in out, out
     assert "templates" in out, out
 
 
-@_needs_installer
-def test_installer_tests_are_not_skipped_in_the_source_tree():
-    """NEGATIVE CONTROL FOR the skip-when-templates-is-absent marker.
-    DO NOT DELETE AS REDUNDANT.
-
-    Protects: the five installer tests in Docket's own repository. Without it,
-    a mistake in the skip condition would turn those tests off here too and the
-    suite would stay green, with nobody having run them."""
-    assert INSTALLER.is_file(), "templates/install.sh missing in the source tree"
-    assert not _needs_installer.args[0], "skip condition is true in the source tree"
-
-
-@_needs_installer
+@installer_test
 def test_installer_on_a_repo_with_no_commits_installs_fully(tmp_path):
     """A target with no commits is a complete install, not a half-install.
 
@@ -759,28 +790,275 @@ def test_installer_on_a_repo_with_no_commits_installs_fully(tmp_path):
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
     assert "ERROR" not in out, out
-    assert "no commits" in out and "closure" in out.lower(), out
+    assert "current branch has no commits yet" in out and "closure" in out.lower(), out
     for rel in ("checks/check_duplicate_ids.py", "tests/test_checks.py",
                 "DOCKET.md", ".github/workflows/ledger-ci.yml", ".gitattributes"):
         assert (target / rel).is_file(), f"{rel} missing after install"
-    hook = _g(target, "rev-parse", "--git-path", "hooks/pre-commit").stdout.strip()
-    assert "docket-checks" in (target / hook).read_text(encoding="utf-8")
+    assert "docket-checks" in _hook_path(target).read_text(encoding="utf-8")
 
 
-@_needs_installer
+@installer_test
+def test_installer_names_the_branch_not_the_repository_on_an_unborn_branch(tmp_path):
+    """The notice must be true when the repository HAS commits but the current
+    branch does not (an orphan checkout).
+
+    Protects: the accuracy of the skip notice. Without it, the wording could
+    drift back to "this repository has no commits", which is false here and
+    would send the user looking for a problem that does not exist."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "an adopter repo\n"})
+    _g(target, "checkout", "-q", "--orphan", "fresh")
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "current branch has no commits yet" in r.stdout, r.stdout
+    assert "repository has no commits" not in r.stdout, r.stdout
+
+
+@installer_test
+def test_installer_on_a_shallow_clone_installs_fully(tmp_path):
+    """A shallow clone is a complete install, not a half-install.
+
+    Reachability of a closure commit cannot be decided in a shallow history,
+    so the closure check refuses to run there (exit 2) -- after the installer
+    had already written its files. That check is verification only, so the
+    installer now skips it with a notice, as it does for an unborn branch.
+
+    Protects: adopters whose CI or tooling clones with --depth. Without it,
+    that path leaves files and a hook written but exits non-zero with the suite
+    never run; the no-commits test above does not reach this branch."""
+    origin = _init_repo(tmp_path / "origin")
+    _commit(origin, "one", {"README.md": "one\n"})
+    _commit(origin, "two", {"README.md": "two\n"})
+    shallow = tmp_path / "shallow"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", origin.as_uri(), str(shallow)],
+        capture_output=True, text=True, encoding="utf-8")
+    assert cloned.returncode == 0, cloned.stderr
+    assert _g(shallow, "rev-parse", "--is-shallow-repository").stdout.strip() == "true"
+    r = _run_installer(INSTALLER, shallow)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert "ERROR" not in out and "shallow clone" in out, out
+    assert (shallow / "checks/check_closure_references.py").is_file()
+
+
+@installer_test
+def test_a_conflicting_file_aborts_before_anything_is_written(tmp_path):
+    """NEGATIVE CONTROL FOR the install-is-all-or-nothing claim.
+    DO NOT DELETE AS REDUNDANT.
+
+    The installer refuses to overwrite a differing file, but it used to find
+    that out part-way through copying, after other files and directories were
+    already written. Now every conflict is found first.
+
+    Protects: the claim that a refused install leaves the repository exactly as
+    it was. Without it, the older partial-write behaviour passes
+    test_installer_refuses_to_clobber_a_differing_file, which only looks at the
+    one differing file."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {
+        "README.md": "an adopter repo\n",
+        "checks/check_pending_markers.py": "# mine, not yours\n"})
+
+    def tree():
+        return sorted(p.relative_to(target).as_posix() for p in target.rglob("*")
+                      if ".git" not in p.relative_to(target).parts)
+
+    before = tree()
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "nothing was written" in (r.stdout + r.stderr).lower()
+    assert tree() == before, set(tree()) ^ set(before)
+    assert not _hook_path(target).exists()
+
+
+@installer_test
 def test_installer_still_runs_the_closure_check_when_a_commit_exists(tmp_path):
-    """NEGATIVE CONTROL FOR the no-commits skip. DO NOT DELETE AS REDUNDANT.
+    """NEGATIVE CONTROL FOR the no-commits and shallow skips.
+    DO NOT DELETE AS REDUNDANT.
 
     Protects: the closure-reference verification for every normal adopter.
     Without it, an over-broad skip (always skipping the check) would pass the
-    no-commits test above, and an installed ledger would never be checked at
-    install time, silently."""
+    no-commits and shallow tests above, and an installed ledger would never be
+    checked at install time, silently."""
     target = _init_repo(tmp_path / "adopter")
     _commit(target, "initial", {"README.md": "an adopter repo\n"})
     r = _run_installer(INSTALLER, target)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[closure-refs] PASS" in r.stdout, r.stdout
-    assert "no commits" not in r.stdout
+    assert "SKIPPED" not in r.stdout
+
+
+# ------------------------------------------------------------- uninstaller
+
+UNINSTALLER = REPO / "templates" / "uninstall.sh"
+DOCKET_FILES = ("checks/check_duplicate_ids.py", "checks/_ledger.py",
+                "tests/test_checks.py", ".github/workflows/ledger-ci.yml")
+
+
+def _adopter_with_user_files(tmp_path: Path) -> Path:
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {
+        "README.md": "an adopter repo\n",
+        "tests/test_mine.py": "def test_mine():\n    assert True\n",
+        "checks/lint_mine.py": "# my own lint\n"})
+    return target
+
+
+def _hook_path(repo: Path) -> Path:
+    rel = _g(repo, "rev-parse", "--git-path", "hooks/pre-commit").stdout.strip()
+    return (repo / rel).resolve()
+
+
+@installer_test
+def test_uninstall_removes_docket_files_and_keeps_the_users(tmp_path):
+    """User files that share tests/ and checks/ survive uninstall.
+
+    The installer copies into whatever checks/ and tests/ the adopter already
+    has; only a file at the very same path as Docket's is refused. An uninstall
+    that deleted the two directories took the adopter's own work with it.
+
+    Protects: the adopter's files. Without it, an uninstall that removes the
+    directories (or everything matching a pattern) passes every other test
+    here, since none of them put a user file next to Docket's."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    for rel in DOCKET_FILES:
+        assert (target / rel).is_file(), rel
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for rel in DOCKET_FILES:
+        assert not (target / rel).exists(), f"{rel} still present"
+    assert (target / "tests/test_mine.py").read_text(encoding="utf-8") == \
+        "def test_mine():\n    assert True\n"
+    assert (target / "checks/lint_mine.py").read_text(encoding="utf-8") == \
+        "# my own lint\n"
+    assert not (target / "tests/fixtures").exists()
+    assert not (target / ".github").exists()  # created by the installer
+    assert not (target / "DOCKET.md").exists()  # untouched starter ledger
+    status = _g(target, "status", "--porcelain").stdout
+    assert status.strip() == "", status  # back to the committed state
+
+
+@installer_test
+def test_uninstall_leaves_changed_files_and_says_so(tmp_path):
+    """A Docket file the user has since edited, and a ledger they have filled
+    in, are left in place with a message.
+
+    Protects: work done after the install. Without it, the uninstaller could
+    delete by name and the hash comparison would never be exercised; the
+    unmodified-file test above passes under either behaviour."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    check = target / "checks/check_duplicate_ids.py"
+    with check.open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n# local tweak\n")
+    ledger = target / "DOCKET.md"
+    with ledger.open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("| UB-104 | OPEN | my row | symptom | - | - | filed |\n")
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "left in place" in r.stdout and "checks/check_duplicate_ids.py" in r.stdout
+    assert "# local tweak" in check.read_text(encoding="utf-8")
+    assert "UB-104" in ledger.read_text(encoding="utf-8")
+    assert not (target / "checks/_ledger.py").exists()  # unmodified: removed
+
+
+@installer_test
+def test_uninstall_removes_only_the_docket_block_from_the_hook_in_hookspath(tmp_path):
+    """With core.hooksPath set, the block comes out of the hook the installer
+    actually wrote, and the user's own hook lines stay.
+
+    Protects: commits after uninstall. Without it, a hard-coded .git/hooks path
+    reads a file that is not there, the hook keeps calling checks that were
+    just deleted, and every later commit fails."""
+    target = _adopter_with_user_files(tmp_path)
+    _g(target, "config", "core.hooksPath", ".githooks")
+    (target / ".githooks").mkdir()
+    mine = "#!/bin/sh\necho my own pre-commit step\n"
+    hook = target / ".githooks/pre-commit"
+    with hook.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(mine)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    assert "docket-checks" in hook.read_text(encoding="utf-8")
+    assert not (target / ".git/hooks/pre-commit").exists()
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert hook.read_text(encoding="utf-8") == mine
+
+
+@installer_test
+def test_uninstall_deletes_a_hook_that_only_docket_wrote(tmp_path):
+    """If nothing but Docket's block (and the shebang) remains, the hook goes.
+
+    Protects: a clean repository after uninstall. Without it, an empty
+    executable stub is left behind on every repo that had no hook before."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    assert _hook_path(target).is_file()
+    assert _run_installer(UNINSTALLER, target).returncode == 0
+    assert not _hook_path(target).exists()
+
+
+@installer_test
+def test_uninstall_in_a_linked_worktree_and_commit_afterwards(tmp_path):
+    """In a linked worktree `.git` is a file and hooks live in the common
+    directory. Uninstall must find both, and a commit afterwards must succeed.
+
+    Protects: worktree users, and the point of the uninstall. Without it, a
+    path built from `.git/hooks` fails in a worktree, and a leftover hook that
+    calls deleted checks turns every later commit into a failure; the commit is
+    the only end-to-end proof that the repository is usable again."""
+    main = _adopter_with_user_files(tmp_path)
+    wt = tmp_path / "wt"
+    _g(main, "worktree", "add", "-q", "-b", "feature", str(wt))
+    assert _run_installer(INSTALLER, wt).returncode == 0
+    hook = _hook_path(wt)
+    assert "docket-checks" in hook.read_text(encoding="utf-8")
+    r = _run_installer(UNINSTALLER, wt)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not hook.exists()
+    (wt / "notes.txt").write_text("after uninstall\n", encoding="utf-8")
+    _g(wt, "add", "notes.txt")
+    committed = _g(wt, "commit", "-qm", "after uninstall", check=False)
+    assert committed.returncode == 0, committed.stdout + committed.stderr
+
+
+@installer_test
+def test_uninstall_twice_is_harmless(tmp_path):
+    """A second uninstall changes nothing and exits 0.
+
+    Protects: re-running after a partial failure or by habit. Without it, a
+    second run could fail on the missing manifest or delete something the user
+    has since put back at a Docket path."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    assert _run_installer(UNINSTALLER, target).returncode == 0
+    (target / "checks/_ledger.py").write_text("# the user's own file\n",
+                                              encoding="utf-8")
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "nothing to uninstall" in r.stdout.lower()
+    assert (target / "checks/_ledger.py").read_text(encoding="utf-8") == \
+        "# the user's own file\n"
+
+
+@installer_test
+def test_uninstall_removes_only_the_gitattributes_stanza(tmp_path):
+    """The user's own .gitattributes lines before and after the stanza stay.
+
+    Protects: the adopter's attribute rules. Without it, deleting the file (or
+    everything from the stanza to the end of the file) passes whenever the
+    stanza was the only content, which is the case in every other test."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n",
+                                ".gitattributes": "*.png binary\n"})
+    assert _run_installer(INSTALLER, target).returncode == 0
+    with (target / ".gitattributes").open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("*.jpg binary\n")
+    assert _run_installer(UNINSTALLER, target).returncode == 0
+    attrs = (target / ".gitattributes").read_text(encoding="utf-8")
+    assert attrs.splitlines() == ["*.png binary", "*.jpg binary"], attrs
 
 
 # ------------------------------------------- state transitions over a range
