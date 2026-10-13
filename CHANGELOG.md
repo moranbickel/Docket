@@ -9,6 +9,10 @@ Installer and uninstaller, found by walking the quick start on Windows.
 - The installed copy of the suite skips the tests of the installer and uninstaller (they need `templates/`, which is not copied) instead of failing, so the installer's final step passes and it prints its OK line.
 - The installer leaves no bytecode or pytest cache in your tree, and starts its `.gitattributes` and hook blocks on a new line.
 - Replaced the "about 14 minutes on Windows" estimate with a measured statement.
+- The installer refuses a target that is not the repository's top level (exit 2, nothing written); the uninstaller uses the top level and says so, and keeps the manifest until every entry is dealt with.
+- The uninstaller cuts the `.gitattributes` stanza only if it is still exactly as installed (hash stored in the manifest); otherwise it leaves the file alone and says what to remove by hand. It ignores manifest entries that are absolute, climb out of the repository, or name a hook other than this repository's.
+- The installer's preflight also refuses a directory where a file goes and a file where a directory goes, and recognises its own hook block by its exact marker line rather than the word `docket-checks`. A failure part-way still leaves a manifest.
+- The pre-commit hook no longer leaves `checks/__pycache__` in your tree.
 
 ## v0.2 - 2026-08-04
 

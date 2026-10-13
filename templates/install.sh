@@ -42,7 +42,16 @@ if ! git -C "$TARGET" rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "docket: ERROR: $TARGET is not a git worktree" >&2
   exit 2
 fi
-TARGET="$(cd "$TARGET" && pwd)"
+TARGET="$(cd "$TARGET" && pwd -P)"
+# The hook, the manifest and the uninstaller all assume the repository's top
+# level, so refuse anything else rather than install into a subdirectory.
+TOP="$(cd "$(git -C "$TARGET" rev-parse --show-toplevel)" && pwd -P)"
+if [ "$TARGET" != "$TOP" ]; then
+  echo "docket: ERROR: $TARGET is not the top level of its repository." >&2
+  echo "docket:        Pass the top level instead: $TOP" >&2
+  echo "docket:        nothing was written." >&2
+  exit 2
+fi
 
 PY=""
 for c in python3 python; do
@@ -55,31 +64,27 @@ fi
 
 # Files to install: checks/ and tests/ whole, plus the CI workflow.
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 LIST="$WORK/list"
 NEW="$WORK/new-entries"
 : > "$NEW"
+MANIFEST=""
+
+# Write the manifest from what has been recorded so far, merged with any earlier
+# one. Called on the normal path and again from the EXIT trap, so a failure
+# half-way through still leaves a manifest the uninstaller can use.
+flush_manifest() {
+  [ -n "$MANIFEST" ] && [ -s "$NEW" ] || return 0
+  mkdir -p "$(dirname "$MANIFEST")"
+  {
+    printf '# docket install manifest v1\n'
+    [ -f "$MANIFEST" ] && cat "$MANIFEST"
+    cat "$NEW"
+  } | awk '!seen[$0]++' > "$WORK/manifest"
+  cat "$WORK/manifest" > "$MANIFEST"
+}
+trap 'flush_manifest || true; rm -rf "$WORK"' EXIT
 ( cd "$SRC" && find checks tests -type f ! -path '*__pycache__*' ! -name '*.pyc' ) > "$LIST"
 echo ".github/workflows/ledger-ci.yml" >> "$LIST"
-
-# --- preflight: find every conflict BEFORE writing anything -------------------
-# Never clobber a file that exists and differs. An identical file is a no-op,
-# which also makes the installer idempotent and lets you run it against a
-# clone of Docket itself (`install.sh .`) -- there src and dst are literally
-# the same path, and cp refuses that.
-CONFLICTS=0
-while IFS= read -r rel; do
-  dst="$TARGET/$rel"
-  if [ -f "$dst" ] && ! cmp -s "$SRC/$rel" "$dst"; then
-    echo "docket: ERROR: $dst exists and differs -- refusing to overwrite." >&2
-    CONFLICTS=1
-  fi
-done < "$LIST"
-if [ "$CONFLICTS" -ne 0 ]; then
-  echo "docket:        move it aside (or merge by hand) and re-run." >&2
-  echo "docket:        nothing was written." >&2
-  exit 1
-fi
 
 # --- paths this install will touch, resolved the way git resolves them -------
 abs_git_path() {
@@ -92,6 +97,45 @@ abs_git_path() {
 MANIFEST="$(abs_git_path docket-install.manifest)"
 HOOKS_DIR="$(abs_git_path hooks)"
 HOOK="$HOOKS_DIR/pre-commit"
+ATTRS="$TARGET/.gitattributes"
+
+# --- preflight: find every conflict BEFORE writing anything -------------------
+# Never clobber a file that exists and differs. An identical file is a no-op,
+# which also makes the installer idempotent and lets you run it against a
+# clone of Docket itself (`install.sh .`) -- there src and dst are literally
+# the same path, and cp refuses that. Anything that exists but is not a regular
+# file where a file goes, or is not a directory where a directory goes, is a
+# conflict too: writing into it would fail part-way.
+CONFLICTS=0
+conflict() { echo "docket: ERROR: $1" >&2; CONFLICTS=1; }
+want_file() {   # a path that must be absent or a regular file
+  if [ -e "$1" ] && [ ! -f "$1" ]; then conflict "$1 exists and is not a regular file -- refusing to write there."; fi
+}
+want_dir() {    # a path that must be absent or a directory
+  if [ -e "$1" ] && [ ! -d "$1" ]; then conflict "$1 exists and is not a directory -- refusing to write under it."; fi
+}
+while IFS= read -r rel; do
+  dst="$TARGET/$rel"
+  if [ -f "$dst" ] && ! cmp -s "$SRC/$rel" "$dst"; then
+    conflict "$dst exists and differs -- refusing to overwrite."
+  else
+    want_file "$dst"
+  fi
+  _d="$(dirname "$rel")"
+  while [ "$_d" != "." ] && [ "$_d" != "/" ]; do
+    want_dir "$TARGET/$_d"
+    _d="$(dirname "$_d")"
+  done
+done < "$LIST"
+want_file "$TARGET/DOCKET.md"
+want_file "$ATTRS"
+want_file "$HOOK"
+want_dir "$HOOKS_DIR"
+if [ "$CONFLICTS" -ne 0 ]; then
+  echo "docket:        move it aside (or merge by hand) and re-run." >&2
+  echo "docket:        nothing was written." >&2
+  exit 1
+fi
 
 # Record the directories this install is about to create (outermost first), so
 # the uninstaller can remove them again if they are empty.
@@ -141,16 +185,24 @@ fi
 # equivalent rule -- as this one did -- gets the stanza appended anyway, and
 # ends up declaring `DOCKET.md text eol=lf` twice. Found by running this
 # installer against Docket itself.
-ATTRS="$TARGET/.gitattributes"
+# Docket's stanza runs from its opening line to the first closing "# ----" line
+# after it. The same awk program is in uninstall.sh; keep the two in step.
+extract_stanza() {
+  awk '!inb && /^# --- Docket ledger:/ { inb = 1; print; next }
+       inb { print }
+       inb && /^# -+[ \t\r]*$/ { found = 1; exit }
+       END { exit !found }' "$1"
+}
+STANZA_HASH="$(extract_stanza "$SRC/templates/gitattributes-stanza" | tr -d '\r' | git hash-object --stdin)"
 if grep -qE '^[[:space:]]*DOCKET\.md[[:space:]]' "$ATTRS" 2>/dev/null; then
   echo "docket: .gitattributes already configures DOCKET.md -- left untouched"
 else
   if [ -f "$ATTRS" ]; then
-    printf 'attr\tappended\n' >> "$NEW"
+    printf 'attr\tappended\t%s\n' "$STANZA_HASH" >> "$NEW"
     # Start the stanza on a line of its own even if the file lacks a final newline.
     if [ -s "$ATTRS" ] && [ -n "$(tail -c 1 "$ATTRS")" ]; then printf '\n' >> "$ATTRS"; fi
   else
-    printf 'attr\tcreated\n' >> "$NEW"
+    printf 'attr\tcreated\t%s\n' "$STANZA_HASH" >> "$NEW"
   fi
   cat "$SRC/templates/gitattributes-stanza" >> "$ATTRS"
   echo "docket: .gitattributes stanza appended"
@@ -158,7 +210,7 @@ fi
 
 # --- pre-commit hook --------------------------------------------------------
 mkdir -p "$HOOKS_DIR"
-if [ -f "$HOOK" ] && grep -q 'docket-checks' "$HOOK" 2>/dev/null; then
+if [ -f "$HOOK" ] && grep -q '^# --- docket-checks (installed by' "$HOOK" 2>/dev/null; then
   echo "docket: pre-commit hook already installed at $HOOK"
 else
   if [ ! -f "$HOOK" ]; then printf '#!/bin/sh\n' > "$HOOK"; fi
@@ -169,8 +221,8 @@ else
 # Root from the COMMITTING worktree, resolved now, at hook time.
 DOCKET_ROOT="\$(git rev-parse --show-toplevel)"
 if [ -f "\$DOCKET_ROOT/DOCKET.md" ]; then
-  ( cd "\$DOCKET_ROOT" && $PY checks/check_duplicate_ids.py DOCKET.md ) || exit 1
-  ( cd "\$DOCKET_ROOT" && $PY checks/check_claim_collision.py DOCKET.md ) || exit 1
+  ( cd "\$DOCKET_ROOT" && PYTHONDONTWRITEBYTECODE=1 $PY checks/check_duplicate_ids.py DOCKET.md ) || exit 1
+  ( cd "\$DOCKET_ROOT" && PYTHONDONTWRITEBYTECODE=1 $PY checks/check_claim_collision.py DOCKET.md ) || exit 1
 fi
 # --- end docket-checks ------------------------------------------------------
 EOF
@@ -179,13 +231,7 @@ EOF
 fi
 
 # --- install manifest: merge with any earlier one, so a re-install keeps it --
-mkdir -p "$(dirname "$MANIFEST")"
-{
-  printf '# docket install manifest v1\n'
-  [ -f "$MANIFEST" ] && cat "$MANIFEST"
-  cat "$NEW"
-} | awk '!seen[$0]++' > "$WORK/manifest"
-cat "$WORK/manifest" > "$MANIFEST"
+flush_manifest
 
 # --- self-verification ------------------------------------------------------
 # Execute the installed checks, here, now. An installer that reports success

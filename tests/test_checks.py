@@ -1061,6 +1061,229 @@ def test_uninstall_removes_only_the_gitattributes_stanza(tmp_path):
     assert attrs.splitlines() == ["*.png binary", "*.jpg binary"], attrs
 
 
+# ------------------------------- hardening: boundaries, targets, manifest
+
+def _manifest_path(repo: Path) -> Path:
+    rel = _g(repo, "rev-parse", "--git-path", "docket-install.manifest").stdout.strip()
+    return (repo / rel).resolve()
+
+
+def _tree(repo: Path):
+    """Every file and directory under repo, .git included, with file bytes."""
+    out = {}
+    for p in sorted(repo.rglob("*")):
+        key = p.relative_to(repo).as_posix()
+        out[key] = p.read_bytes() if p.is_file() else None
+    return out
+
+
+def _stanza_closing_line(text: str) -> str:
+    lines = text.splitlines()
+    return next(ln for ln in reversed(lines) if _re.fullmatch(r"# -+\s*", ln))
+
+
+@installer_test
+def test_uninstall_leaves_gitattributes_alone_when_the_stanza_boundary_is_gone(tmp_path):
+    """The stanza's closing line looks decorative; deleting it must not make the
+    uninstaller cut through the user's rules that follow.
+
+    Protects: the adopter's own .gitattributes rules. Without it, a cut that
+    starts at the opening line and runs to a closing line that no longer exists
+    deletes everything after it -- and says the user's rules were kept. The
+    shipped stanza-only test keeps the closing line, so it passes either way."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n", ".gitattributes": "*.png binary\n"})
+    assert _run_installer(INSTALLER, target).returncode == 0
+    attrs = target / ".gitattributes"
+    text = attrs.read_text(encoding="utf-8")
+    closing = _stanza_closing_line(text)
+    kept = "".join(ln for ln in text.splitlines(keepends=True) if ln.rstrip() != closing.rstrip())
+    with attrs.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(kept.replace("\r", "") + "*.jpg binary\n*.pdf binary\n")
+    before = attrs.read_bytes()
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert attrs.read_bytes() == before, attrs.read_text(encoding="utf-8")
+    assert "by hand" in r.stdout and ".gitattributes" in r.stdout, r.stdout
+    assert _manifest_path(target).is_file(), "manifest deleted with an entry unprocessed"
+
+
+@installer_test
+def test_uninstall_leaves_gitattributes_alone_when_the_stanza_was_edited(tmp_path):
+    """A stanza whose text differs from what was installed is not Docket's any
+    more; the uninstaller compares it to the hash stored at install time.
+
+    Protects: rules the user wrote INSIDE the stanza. Without it, the markers
+    alone would be trusted and a hand-edited stanza removed wholesale."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n", ".gitattributes": "*.png binary\n"})
+    assert _run_installer(INSTALLER, target).returncode == 0
+    attrs = target / ".gitattributes"
+    edited = attrs.read_text(encoding="utf-8").replace(
+        "DOCKET.md text eol=lf", "DOCKET.md text eol=lf\n*.csv text eol=lf")
+    with attrs.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(edited.replace("\r", ""))
+    before = attrs.read_bytes()
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert attrs.read_bytes() == before
+    assert "by hand" in r.stdout, r.stdout
+
+
+@installer_test
+def test_install_refuses_a_subdirectory_target(tmp_path):
+    """Installing into a subdirectory of a repository is refused, nothing written.
+
+    The installer validated the path with --show-toplevel but then wrote under
+    the subdirectory, while the hook and the manifest assume the top level.
+
+    Protects: a user who runs the installer with `.` from inside a project
+    subfolder. Without it, 30 files land in the wrong place, the hook looks for
+    checks/ at the top level, and the uninstaller cannot find them."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n", "sub/keep.txt": "keep\n"})
+    before = _tree(target)
+    r = _run_installer(INSTALLER, target / "sub")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "top level" in (r.stdout + r.stderr), r.stdout + r.stderr
+    assert _tree(target) == before
+
+
+@installer_test
+def test_uninstall_from_a_subdirectory_uses_the_top_level(tmp_path):
+    """Uninstall resolves the top level and says so; it never reports success
+    over files it did not look for.
+
+    Protects: the install record. Without it, a subdirectory target joined every
+    manifest path to the wrong directory, found nothing, deleted the hook and
+    the manifest anyway and printed "uninstalled" with all the files in place."""
+    target = _adopter_with_user_files(tmp_path)
+    (target / "sub").mkdir()
+    with (target / "sub/note.txt").open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write("n\n")
+    assert _run_installer(INSTALLER, target).returncode == 0
+    r = _run_installer(UNINSTALLER, target / "sub")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "top level" in r.stdout, r.stdout
+    for rel in DOCKET_FILES:
+        assert not (target / rel).exists(), f"{rel} still present"
+    assert (target / "sub/note.txt").is_file()
+    assert not _manifest_path(target).exists()
+
+
+@installer_test
+def test_uninstall_ignores_tampered_manifest_entries(tmp_path):
+    """Manifest entries that point outside the repository, or at a hook that is
+    not this repository's, are ignored and kept in the manifest.
+
+    Protects: files outside the working tree. Without it, a hand-edited or
+    mis-merged manifest line such as `file <hash> ../x` deletes a file one
+    directory above the repository, and a `hook` line rewrites and deletes any
+    file that happens to contain the two marker lines. The manifest is also
+    not deleted while an entry is unprocessed."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    outside = tmp_path / "outside.txt"
+    with outside.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write("not yours to delete\n")
+    outside_hash = _g(target, "hash-object", "--no-filters", str(outside)).stdout.strip()
+    fake_hook = tmp_path / "other-hook"
+    block = ("#!/bin/sh\necho mine\n"
+             "# --- docket-checks (installed by Docket templates/install.sh) ---\n"
+             "echo hi\n# --- end docket-checks ---\n")
+    with fake_hook.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(block)
+    manifest = _manifest_path(target)
+    with manifest.open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write(f"file\t{outside_hash}\t../outside.txt\n")
+        fh.write(f"file\t{outside_hash}\t{outside.as_posix()}\n")
+        fh.write("dir\t..\n")
+        fh.write(f"hook\t{fake_hook.as_posix()}\n")
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert outside.read_text(encoding="utf-8") == "not yours to delete\n"
+    assert fake_hook.read_text(encoding="utf-8") == block
+    assert tmp_path.is_dir() and target.is_dir()
+    assert "ignored" in r.stdout, r.stdout
+    for rel in DOCKET_FILES:  # the genuine entries were still honoured
+        assert not (target / rel).exists(), f"{rel} still present"
+    assert manifest.is_file(), "manifest deleted with entries unprocessed"
+    left = manifest.read_text(encoding="utf-8")
+    assert "../outside.txt" in left and "other-hook" in left
+
+
+@installer_test
+def test_a_directory_where_a_file_goes_aborts_before_writing(tmp_path):
+    """NEGATIVE CONTROL FOR the preflight (existing but not a regular file).
+    DO NOT DELETE AS REDUNDANT.
+
+    Protects: the promise that a refusal leaves the repository exactly as it
+    was. Without it, the preflight (which only looked for a differing regular
+    file) lets a directory at a Docket file's path through; the copy then lands
+    inside that directory, hashing fails, and the repository is left half
+    written with no manifest for the uninstaller to use."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n",
+                                "checks/_ledger.py/mine.txt": "user file\n"})
+    before = _tree(target)
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "nothing was written" in (r.stdout + r.stderr).lower()
+    assert _tree(target) == before
+
+
+@installer_test
+def test_a_file_where_a_directory_goes_aborts_before_writing(tmp_path):
+    """NEGATIVE CONTROL FOR the preflight (a file where a directory is needed).
+    DO NOT DELETE AS REDUNDANT.
+
+    Protects: the same promise for the other direction. Without it, a regular
+    file named `tests` makes mkdir fail part-way through the copy, after the
+    checks/ files were already written."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n", "tests": "i am a file\n"})
+    before = _tree(target)
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "nothing was written" in (r.stdout + r.stderr).lower()
+    assert _tree(target) == before
+
+
+@installer_test
+def test_a_comment_mentioning_the_marker_is_not_the_hook_block(tmp_path):
+    """The installer decides "already installed" by Docket's exact start-marker
+    line, not by the word `docket-checks` appearing anywhere in the hook.
+
+    Protects: the checks actually running. Without it, a user comment such as
+    `# TODO: evaluate docket-checks someday` makes the installer report the
+    hook as installed, write no block, and end with OK while nothing runs."""
+    target = _adopter_with_user_files(tmp_path)
+    hook = _hook_path(target)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    mine = "#!/bin/sh\n# TODO: evaluate docket-checks someday\n"
+    with hook.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(mine)
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "already installed" not in r.stdout, r.stdout
+    assert "\n# --- docket-checks (installed by" in hook.read_text(encoding="utf-8")
+    assert _run_installer(UNINSTALLER, target).returncode == 0
+    assert hook.read_text(encoding="utf-8") == mine
+
+
+@installer_test
+def test_the_hook_leaves_no_bytecode_in_the_working_tree(tmp_path):
+    """Running the hook on a commit must not create checks/__pycache__.
+
+    Protects: the adopter's `git add -A`. Without it, the first commit after
+    install leaves untracked bytecode that a later `git add -A` commits, and
+    no .gitignore is shipped to hide it."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    _commit(target, "after install", {"notes.txt": "n\n"})
+    assert not (target / "checks/__pycache__").exists()
+
+
 # ------------------------------------------- state transitions over a range
 
 def _repo_with_midrange_reopen(tmp_path: Path, reopen_note: str):

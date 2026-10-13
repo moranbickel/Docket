@@ -9,13 +9,20 @@
 #     recorded at install time; a file you have changed is left in place, with
 #     a message (this includes DOCKET.md once you have added rows to it);
 #   * removes Docket's marked block from the pre-commit hook the installer
-#     modified, and deletes that hook only if nothing but a shebang remains;
-#   * removes Docket's marked stanza from .gitattributes, and deletes that file
-#     only if the installer created it and nothing else remains;
+#     modified -- only if both of its marker lines are still there -- and
+#     deletes that hook only if nothing but a shebang remains;
+#   * removes Docket's stanza from .gitattributes only if it is still exactly
+#     what was installed (opening line, closing line and text, by hash); if it
+#     is not, the file is left untouched and you are told what to remove;
 #   * removes Python bytecode of Docket's own scripts, and then any directory
 #     the installer created, but only if it is now empty.
 # It never deletes a directory wholesale and never touches a file that is not
-# in the manifest. Running it twice is harmless.
+# in the manifest. A manifest entry it cannot safely act on (a path that is
+# absolute, climbs out of the repository, or a hook that is not this
+# repository's) is ignored with a message and stays in the manifest, and the
+# manifest is deleted only when every entry has been dealt with. If you give a
+# subdirectory of the repository it uses the repository's top level and says
+# so. Running it twice is harmless.
 set -eu
 
 TARGET="${1:?usage: uninstall.sh /path/to/your-repo}"
@@ -23,13 +30,21 @@ if ! git -C "$TARGET" rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "docket: ERROR: $TARGET is not a git worktree" >&2
   exit 2
 fi
-TARGET="$(cd "$TARGET" && pwd)"
+GIVEN="$(cd "$TARGET" && pwd -P)"
+TARGET="$(cd "$(git -C "$GIVEN" rev-parse --show-toplevel)" && pwd -P)"
+if [ "$GIVEN" != "$TARGET" ]; then
+  echo "docket: note: $GIVEN is inside the repository whose top level is $TARGET; using the top level."
+fi
 
-_p="$(git -C "$TARGET" rev-parse --git-path docket-install.manifest)"
-case "$_p" in
-  /*|[A-Za-z]:*) MANIFEST="$_p" ;;
-  *) MANIFEST="$TARGET/$_p" ;;
-esac
+abs_git_path() {
+  _p="$(git -C "$TARGET" rev-parse --git-path "$1")"
+  case "$_p" in
+    /*|[A-Za-z]:*) printf '%s\n' "$_p" ;;
+    *) printf '%s\n' "$TARGET/$_p" ;;
+  esac
+}
+MANIFEST="$(abs_git_path docket-install.manifest)"
+EXPECTED_HOOK="$(abs_git_path hooks)/pre-commit"
 
 if [ ! -f "$MANIFEST" ]; then
   echo "docket: nothing to uninstall -- no install manifest for this working tree ($MANIFEST)."
@@ -46,11 +61,29 @@ ATTR="$WORK/attr"
 printf '# docket install manifest v1\n' > "$KEEP"
 : > "$DIRS"; : > "$HOOKS"; : > "$ATTR"
 
+# A manifest path is usable only if it is relative, has no ".." component, and
+# its parent directory really lives inside the top level (symlinks resolved).
+safe_rel() {
+  case "$1" in
+    ""|/*|[A-Za-z]:*|..|../*|*/..|*/../*) return 1 ;;
+  esac
+  _par="$(dirname "$TARGET/$1")"
+  [ -d "$_par" ] || return 0            # parent absent: nothing there to touch
+  _phys="$(cd "$_par" && pwd -P)"
+  case "$_phys/" in "$TARGET"/*) return 0 ;; esac
+  return 1
+}
+
 # --- files: remove only what is unchanged since the install -----------------
 while IFS="$TAB" read -r kind a b || [ -n "$kind" ]; do
   case "$kind" in
     file)
       rel="$b"; want="$a"; path="$TARGET/$rel"
+      if ! safe_rel "$rel"; then
+        echo "docket: ignored manifest entry (path is outside this repository): $rel"
+        printf 'file\t%s\t%s\n' "$want" "$rel" >> "$KEEP"
+        continue
+      fi
       if [ ! -f "$path" ]; then
         continue                                  # already gone
       fi
@@ -70,23 +103,34 @@ while IFS="$TAB" read -r kind a b || [ -n "$kind" ]; do
         echo "docket: left in place (changed since install): $rel"
         printf 'file\t%s\t%s\n' "$want" "$rel" >> "$KEEP"
       fi ;;
-    dir)  printf '%s\n' "$a" >> "$DIRS" ;;
+    dir)
+      if safe_rel "$a" && [ "$a" != "." ]; then
+        printf '%s\n' "$a" >> "$DIRS"
+      else
+        echo "docket: ignored manifest entry (directory is outside this repository): $a"
+        printf 'dir\t%s\n' "$a" >> "$KEEP"
+      fi ;;
     hook) printf '%s\n' "$a" >> "$HOOKS" ;;
-    attr) printf '%s\n' "$a" >> "$ATTR" ;;
+    attr) printf '%s\t%s\n' "$a" "$b" >> "$ATTR" ;;
   esac
 done < "$MANIFEST"
 
 # --- pre-commit hook: take out Docket's block, and only that ----------------
+# Only the hook this repository resolves to now is touched; a recorded path
+# that differs is not trusted.
 while IFS= read -r hook; do
   [ -n "$hook" ] || continue
-  if [ ! -f "$hook" ]; then
-    # The directory may have moved (core.hooksPath changed); ask Git now.
-    cand="$(git -C "$TARGET" rev-parse --git-path hooks)/pre-commit"
-    case "$cand" in /*|[A-Za-z]:*) ;; *) cand="$TARGET/$cand" ;; esac
-    if [ -f "$cand" ]; then hook="$cand"; else continue; fi
+  if [ "$hook" != "$EXPECTED_HOOK" ]; then
+    echo "docket: ignored manifest entry (hook $hook is not this repository's hook, $EXPECTED_HOOK)"
+    echo "docket:   if Docket's block is still in $hook, remove it by hand."
+    printf 'hook\t%s\n' "$hook" >> "$KEEP"
+    continue
   fi
-  if grep -q '^# --- docket-checks (installed by' "$hook" &&
-     grep -q '^# --- end docket-checks' "$hook"; then
+  [ -f "$hook" ] || continue                      # already gone
+  has_start=0; has_end=0
+  if grep -q '^# --- docket-checks (installed by' "$hook"; then has_start=1; fi
+  if grep -q '^# --- end docket-checks' "$hook"; then has_end=1; fi
+  if [ "$has_start" = 1 ] && [ "$has_end" = 1 ]; then
     awk '/^# --- docket-checks \(installed by/ { skip = 1 }
          !skip { print }
          /^# --- end docket-checks/ { skip = 0 }' "$hook" > "$WORK/hook.new"
@@ -97,27 +141,52 @@ while IFS= read -r hook; do
     else
       echo "docket: removed Docket's block from $hook (your other hook lines are kept)"
     fi
+  elif [ "$has_start" = 0 ] && [ "$has_end" = 0 ]; then
+    echo "docket: no Docket block found in $hook -- nothing to remove"
   else
-    echo "docket: no Docket block found in $hook -- left as is"
+    echo "docket: Docket's block in $hook is missing one of its marker lines -- left as is."
+    echo "docket:   remove the lines from '# --- docket-checks' to '# --- end docket-checks' by hand."
+    printf 'hook\t%s\n' "$hook" >> "$KEEP"
   fi
 done < "$HOOKS"
 
 # --- .gitattributes: take out Docket's stanza, and only that ----------------
-if [ -s "$ATTR" ] && [ -f "$TARGET/.gitattributes" ]; then
+# Docket's stanza runs from its opening line to the first closing "# ----" line
+# after it. The same awk program is in install.sh; keep the two in step.
+extract_stanza() {
+  awk '!inb && /^# --- Docket ledger:/ { inb = 1; print; next }
+       inb { print }
+       inb && /^# -+[ \t\r]*$/ { found = 1; exit }
+       END { exit !found }' "$1"
+}
+while IFS="$TAB" read -r how want || [ -n "$how" ]; do
+  [ -n "$how" ] || continue
   attrs="$TARGET/.gitattributes"
-  if grep -q '^# --- Docket ledger:' "$attrs"; then
-    awk '/^# --- Docket ledger:/ { skip = 1 }
+  [ -f "$attrs" ] || continue                     # already gone
+  if ! grep -q '^# --- Docket ledger:' "$attrs"; then
+    echo "docket: no Docket stanza found in .gitattributes -- nothing to remove"
+    continue
+  fi
+  if [ -n "$want" ] && extract_stanza "$attrs" > "$WORK/stanza" &&
+     [ "$(tr -d '\r' < "$WORK/stanza" | git hash-object --stdin)" = "$want" ]; then
+    awk '!skip && /^# --- Docket ledger:/ { skip = 1 }
          !skip { print }
          skip && /^# -+[ \t\r]*$/ { skip = 0 }' "$attrs" > "$WORK/attrs.new"
     cat "$WORK/attrs.new" > "$attrs"
-    if awk 'NF { n++ } END { exit (n > 0) }' "$attrs" && grep -qx created "$ATTR"; then
+    if awk 'NF { n++ } END { exit (n > 0) }' "$attrs" && [ "$how" = created ]; then
       rm -f "$attrs"
       echo "docket: removed .gitattributes (Docket created it and nothing else was in it)"
     else
       echo "docket: removed Docket's stanza from .gitattributes (your other rules are kept)"
     fi
+  else
+    echo "docket: .gitattributes left untouched: Docket's stanza is not exactly as installed"
+    echo "docket:   (a marker line is missing or its text was edited), so it was not cut."
+    echo "docket:   Remove by hand the comment block starting '# --- Docket ledger:' and the"
+    echo "docket:   rule 'DOCKET.md text eol=lf', if you no longer want them."
+    printf 'attr\t%s\t%s\n' "$how" "$want" >> "$KEEP"
   fi
-fi
+done < "$ATTR"
 
 # --- directories the installer created: remove only if now empty ------------
 sort -r "$DIRS" | while IFS= read -r d; do
@@ -134,12 +203,12 @@ sort -r "$DIRS" | while IFS= read -r d; do
   fi
 done
 
-# --- manifest: keep only what still applies ---------------------------------
+# --- manifest: delete only when every entry has been dealt with --------------
 if [ "$(wc -l < "$KEEP")" -le 1 ]; then
   rm -f "$MANIFEST"
   echo "docket: uninstalled. Commit the removal if you had committed the install."
 else
   cat "$KEEP" > "$MANIFEST"
-  echo "docket: uninstalled, except the file(s) listed above that you have changed."
-  echo "docket: delete them by hand, or re-run this script after reverting them."
+  echo "docket: uninstalled, except what is listed above. Those entries stay in the"
+  echo "docket: manifest; re-run this script after you have dealt with them."
 fi

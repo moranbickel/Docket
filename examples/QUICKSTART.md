@@ -33,9 +33,20 @@ The target must be a Git repository. It may be brand new or a shallow clone:
 where there is no history to read, the installer skips the one check that needs
 it (closure references), says so, and still finishes.
 
-Every precondition that can be checked before writing is checked first: a Git
-worktree, a Python, and no existing file that differs from the one to be
-installed. If any fails, nothing has been written. Once writing has started, the
+Give the repository's top level (the directory that holds `.git`, or for a
+linked worktree its own root). A subdirectory is refused, because the hook and
+the uninstaller assume the top level:
+
+```text
+docket: ERROR: /path/to/your-repo/sub is not the top level of its repository.
+docket:        Pass the top level instead: /path/to/your-repo
+docket:        nothing was written.
+```
+
+(exit 2). Every other precondition that can be checked before writing is
+checked first too: a Git worktree, a Python, no existing file that differs from
+the one to be installed, and no path of the wrong kind (a directory where a file
+goes, or a file where a directory goes). If any fails, nothing has been written. Once writing has started, the
 remaining steps check your ledger; a failure there reports on the ledger and
 does not undo the install (use the uninstaller below for that).
 
@@ -107,8 +118,9 @@ in the Docket clone's own suite.
 **Windows cost.** The suite builds a scratch Git repository per case, and Git
 subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
 install took between 26 s and 58 s on repeated runs into a one-commit or empty repository. Docket's own
-66-test suite, which also exercises the installer and uninstaller, took 417 s
-(about 7 minutes) there, against a few seconds on Linux. Expect it to vary
+75-test suite, which also exercises the installer and uninstaller, took 16 minutes
+in one run that shared the machine with other work (its 66-test predecessor took
+7 minutes on an idle one); on Linux it takes a few seconds. Expect it to vary
 with antivirus and disk, and do not interrupt it. If pytest is not installed
 the installer says so and reports the suite as pending rather than passed.
 
@@ -163,9 +175,19 @@ What it does, and does not do:
 - Never deletes a directory wholesale. Your own files in `checks/` and `tests/`
   stay; a directory the installer created is removed only once it is empty.
 - Removes only Docket's marked block from the pre-commit hook the installer
-  modified (the path is recorded in the manifest, so `core.hooksPath` and linked
-  worktrees are handled), and deletes the hook only if nothing but a shebang is
-  left. It removes only Docket's stanza from `.gitattributes`.
+  modified, and only if both of its marker lines are still there. It acts on the
+  hook that Git resolves for this repository now (`core.hooksPath` and linked
+  worktrees are handled) and ignores a recorded hook path that differs. It
+  deletes the hook only if nothing but a shebang is left.
+- Removes Docket's stanza from `.gitattributes` only if it is still exactly what
+  was installed (opening line, closing line and text, checked against a hash taken
+  at install time). If you have deleted the closing line or edited the stanza, the
+  file is left untouched and the script tells you what to remove by hand.
+- Ignores, with a message, a manifest entry that is an absolute path or climbs out
+  of the repository with `..`, and keeps it in the manifest. The manifest is
+  deleted only once every entry has been dealt with.
+- Accepts a subdirectory of the repository, says it is using the top level, and
+  proceeds from there (an uninstall is recovery, so it does not refuse).
 - Is safe to run twice: the second run reports that there is nothing to uninstall.
 
 Real output, from a scratch repository whose own `checks/lint_mine.py` and
@@ -196,6 +218,18 @@ second run:
 
 ```text
 docket: nothing to uninstall -- no install manifest for this working tree (/path/to/your-repo/.git/docket-install.manifest).
+```
+
+If the stanza's closing line has been deleted and you appended your own rule,
+this is the real output for `.gitattributes` (your lines are untouched):
+
+```text
+docket: .gitattributes left untouched: Docket's stanza is not exactly as installed
+docket:   (a marker line is missing or its text was edited), so it was not cut.
+docket:   Remove by hand the comment block starting '# --- Docket ledger:' and the
+docket:   rule 'DOCKET.md text eol=lf', if you no longer want them.
+docket: uninstalled, except what is listed above. Those entries stay in the
+docket: manifest; re-run this script after you have dealt with them.
 ```
 
 Two limits. The hook lives in the repository's shared hooks directory, so
