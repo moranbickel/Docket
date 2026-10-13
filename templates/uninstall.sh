@@ -8,9 +8,10 @@
 #   * removes each listed file ONLY if its content still matches the hash
 #     recorded at install time; a file you have changed is left in place, with
 #     a message (this includes DOCKET.md once you have added rows to it);
-#   * removes Docket's marked block from the pre-commit hook the installer
-#     modified -- only if both of its marker lines are still there -- and
-#     deletes that hook only if nothing but a shebang remains;
+#   * removes Docket's marked block from the pre-commit hook Git resolves for
+#     this repository now (so a renamed or moved repository is still found) --
+#     only if both of its marker lines are still there -- and deletes that hook
+#     only if nothing but a shebang remains;
 #   * removes Docket's stanza from .gitattributes only if it is still exactly
 #     what was installed (opening line, closing line and text, by hash); if it
 #     is not, the file is left untouched and you are told what to remove;
@@ -116,17 +117,15 @@ while IFS="$TAB" read -r kind a b || [ -n "$kind" ]; do
 done < "$MANIFEST"
 
 # --- pre-commit hook: take out Docket's block, and only that ----------------
-# Only the hook this repository resolves to now is touched; a recorded path
-# that differs is not trusted.
-while IFS= read -r hook; do
-  [ -n "$hook" ] || continue
-  if [ "$hook" != "$EXPECTED_HOOK" ]; then
-    echo "docket: ignored manifest entry (hook $hook is not this repository's hook, $EXPECTED_HOOK)"
-    echo "docket:   if Docket's block is still in $hook, remove it by hand."
-    printf 'hook\t%s\n' "$hook" >> "$KEEP"
-    continue
-  fi
-  [ -f "$hook" ] || continue                      # already gone
+# The hook is the one Git resolves for this repository NOW (so a repository that
+# has been renamed or moved is still found), and Docket's block is recognised by
+# its exact marker lines. The path recorded in the manifest is advisory: it only
+# says that the installer wrote a block.
+HOOK_SPELLING="$(git -C "$TARGET" rev-parse --git-path hooks)/pre-commit"
+
+remove_hook_block() {   # remove_hook_block <hook file>; returns 1 if left as is
+  hook="$1"
+  [ -f "$hook" ] || return 0                      # already gone
   has_start=0; has_end=0
   if grep -q '^# --- docket-checks (installed by' "$hook"; then has_start=1; fi
   if grep -q '^# --- end docket-checks' "$hook"; then has_end=1; fi
@@ -146,9 +145,27 @@ while IFS= read -r hook; do
   else
     echo "docket: Docket's block in $hook is missing one of its marker lines -- left as is."
     echo "docket:   remove the lines from '# --- docket-checks' to '# --- end docket-checks' by hand."
-    printf 'hook\t%s\n' "$hook" >> "$KEEP"
+    return 1
   fi
-done < "$HOOKS"
+}
+
+if [ -s "$HOOKS" ]; then
+  if ! remove_hook_block "$EXPECTED_HOOK"; then
+    printf 'hook\t%s\n' "$HOOK_SPELLING" >> "$KEEP"
+  fi
+  # A recorded path that is a different file from today's hook, yet still holds
+  # Docket-looking lines, is not touched; it is named only if it exists.
+  while IFS= read -r rec; do
+    [ -n "$rec" ] || continue
+    case "$rec" in /*|[A-Za-z]:*) rec_abs="$rec" ;; *) rec_abs="$TARGET/$rec" ;; esac
+    if [ "$rec_abs" != "$EXPECTED_HOOK" ] && [ -f "$rec_abs" ] &&
+       grep -q '^# --- docket-checks (installed by' "$rec_abs"; then
+      echo "docket: ignored manifest entry: $rec_abs is not this repository's hook ($EXPECTED_HOOK)"
+      echo "docket:   it holds lines that look like Docket's block; left as is. Remove them by hand if they are yours."
+      printf 'hook\t%s\n' "$rec" >> "$KEEP"
+    fi
+  done < "$HOOKS"
+fi
 
 # --- .gitattributes: take out Docket's stanza, and only that ----------------
 # Docket's stanza runs from its opening line to the first closing "# ----" line
@@ -169,9 +186,11 @@ while IFS="$TAB" read -r how want || [ -n "$how" ]; do
   fi
   if [ -n "$want" ] && extract_stanza "$attrs" > "$WORK/stanza" &&
      [ "$(tr -d '\r' < "$WORK/stanza" | git hash-object --stdin)" = "$want" ]; then
-    awk '!skip && /^# --- Docket ledger:/ { skip = 1 }
+    # Exactly one block -- the one whose hash was just verified -- and then stop:
+    # a later line that merely looks like the opening line starts nothing.
+    awk '!done && !skip && /^# --- Docket ledger:/ { skip = 1 }
          !skip { print }
-         skip && /^# -+[ \t\r]*$/ { skip = 0 }' "$attrs" > "$WORK/attrs.new"
+         skip && /^# -+[ \t\r]*$/ { skip = 0; done = 1 }' "$attrs" > "$WORK/attrs.new"
     cat "$WORK/attrs.new" > "$attrs"
     if awk 'NF { n++ } END { exit (n > 0) }' "$attrs" && [ "$how" = created ]; then
       rm -f "$attrs"

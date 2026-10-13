@@ -96,6 +96,11 @@ abs_git_path() {
 }
 MANIFEST="$(abs_git_path docket-install.manifest)"
 HOOKS_DIR="$(abs_git_path hooks)"
+# How Git itself spells the hooks directory ('.git/hooks' or '.githooks' relative
+# to the top level, or an absolute path for a linked worktree). The manifest
+# records this spelling, so it stays true when the repository directory is
+# renamed or moved; the uninstaller re-asks Git and trusts only the markers.
+HOOKS_GIT_SPELLING="$(git -C "$TARGET" rev-parse --git-path hooks)"
 HOOK="$HOOKS_DIR/pre-commit"
 ATTRS="$TARGET/.gitattributes"
 
@@ -214,7 +219,7 @@ if [ -f "$HOOK" ] && grep -q '^# --- docket-checks (installed by' "$HOOK" 2>/dev
   echo "docket: pre-commit hook already installed at $HOOK"
 else
   if [ ! -f "$HOOK" ]; then printf '#!/bin/sh\n' > "$HOOK"; fi
-  printf 'hook\t%s\n' "$HOOK" >> "$NEW"
+  printf 'hook\t%s/pre-commit\n' "$HOOKS_GIT_SPELLING" >> "$NEW"
   if [ -s "$HOOK" ] && [ -n "$(tail -c 1 "$HOOK")" ]; then printf '\n' >> "$HOOK"; fi
   cat >> "$HOOK" <<EOF
 # --- docket-checks (installed by Docket templates/install.sh) ---------------

@@ -1284,6 +1284,100 @@ def test_the_hook_leaves_no_bytecode_in_the_working_tree(tmp_path):
     assert not (target / "checks/__pycache__").exists()
 
 
+# ----------------------- moved repository, one-block cut, mid-install failure
+
+def _files_outside_git(repo: Path):
+    return sorted(p.relative_to(repo).as_posix() for p in repo.rglob("*")
+                  if p.is_file() and ".git" not in p.relative_to(repo).parts)
+
+
+@installer_test
+def test_uninstall_finds_the_hook_after_the_repository_was_moved(tmp_path):
+    """The hook is found by asking Git where it is NOW and recognised by Docket's
+    exact marker lines -- not by the absolute path recorded at install time.
+
+    Protects: commits after a project folder is renamed or moved. Without it, a
+    recorded path that no longer matches makes the uninstaller refuse to touch
+    the live hook, tell the user to clean a path that no longer exists, keep the
+    hook entry forever, and leave a hook that calls deleted checks, so that
+    every commit fails once the ledger (kept because it has rows) is present."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    with (target / "DOCKET.md").open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("| UB-104 | OPEN | my row | symptom | - | - | filed |\n")
+    moved = tmp_path / "moved-adopter"
+    target.rename(moved)
+    r = _run_installer(UNINSTALLER, moved)
+    assert r.returncode == 0, r.stdout + r.stderr
+    hook = _hook_path(moved)
+    assert not hook.exists() or "docket-checks" not in hook.read_text(encoding="utf-8")
+    assert "by hand" not in r.stdout, r.stdout  # no instruction naming a dead path
+    manifest = _manifest_path(moved).read_text(encoding="utf-8") \
+        if _manifest_path(moved).exists() else ""
+    assert "hook\t" not in manifest, manifest  # the entry is clearable
+    _commit(moved, "after move and uninstall", {"notes.txt": "n\n"})
+
+
+@installer_test
+def test_gitattributes_cut_stops_after_the_one_block_it_verified(tmp_path):
+    """Exactly the hashed block is removed; a later line that merely looks like
+    Docket's opening line starts nothing.
+
+    Protects: the user's own rules written under a comment that copies Docket's
+    opening prefix. Without it, the cutter re-arms on that line and deletes the
+    user's rules up to the next dashed line, while saying they were kept."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n", ".gitattributes": "*.png binary\n"})
+    assert _run_installer(INSTALLER, target).returncode == 0
+    with (target / ".gitattributes").open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("# --- Docket ledger: my own note about the ledger\n"
+                 "*.jpg binary\n# -----\n*.pdf binary\n")
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    attrs = (target / ".gitattributes").read_text(encoding="utf-8")
+    assert attrs.splitlines() == [
+        "*.png binary", "# --- Docket ledger: my own note about the ledger",
+        "*.jpg binary", "# -----", "*.pdf binary"], attrs
+
+
+@installer_test
+def test_a_failure_part_way_leaves_a_manifest_that_undoes_it(tmp_path):
+    """A failure after some files were written still leaves a manifest naming
+    exactly those files, and the uninstaller restores the tree.
+
+    Protects: the "a failure part-way still leaves a manifest" promise. Without
+    it, the flush from the EXIT trap could be removed (the manifest then being
+    written only at the end of a successful run) and every other test would
+    stay green; a half-written install would be unrecoverable by the script.
+    The failure is injected into a copy of the installer, after the fifth copy."""
+    src = _source_copy(tmp_path)
+    script = src / "templates" / "install.sh"
+    text = script.read_text(encoding="utf-8")
+    anchor = '  note_file "$rel"\ndone < "$LIST"'
+    assert text.count(anchor) == 1, "copy loop not found; update this injection"
+    script.write_text(text.replace(
+        anchor,
+        '  note_file "$rel"\n  COUNT=$((${COUNT:-0} + 1))\n'
+        '  if [ "$COUNT" -ge 5 ]; then exit 7; fi\ndone < "$LIST"'),
+        encoding="utf-8", newline="\n")
+    target = _adopter_with_user_files(tmp_path)
+    before = _files_outside_git(target)
+    r = _run_installer(script, target)
+    assert r.returncode == 7, r.stdout + r.stderr
+    written = sorted(set(_files_outside_git(target)) - set(before))
+    assert len(written) == 5, written
+    manifest = _manifest_path(target)
+    assert manifest.is_file(), "no manifest after a failure part-way"
+    listed = sorted(ln.split("\t")[2] for ln in
+                    manifest.read_text(encoding="utf-8").splitlines()
+                    if ln.startswith("file\t"))
+    assert listed == written, (listed, written)
+    u = _run_installer(UNINSTALLER, target)
+    assert u.returncode == 0, u.stdout + u.stderr
+    assert _files_outside_git(target) == before
+    assert not manifest.exists()
+
+
 # ------------------------------------------- state transitions over a range
 
 def _repo_with_midrange_reopen(tmp_path: Path, reopen_note: str):

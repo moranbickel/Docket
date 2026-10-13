@@ -92,15 +92,16 @@ docket: running the fixture suite that arms these checks. It builds a
 docket:   scratch git repo per case: a few seconds on Linux/macOS, and
 docket:   noticeably longer on Windows, where git subprocesses are far
 docket:   more expensive. Be patient; it is not hung.
-..............................sssssssssssssssssss.................       [100%]
-47 passed, 19 skipped in 39.24s
+..............................sssssssssssssssssssssssssssssss........... [ 92%]
+......                                                                   [100%]
+47 passed, 31 skipped in 37.13s
 docket: OK -- checks ran clean and the fixture suite passed.
 ```
 
 Into a repository whose current branch has **no commits yet**, the same install
 prints the notice below in place of the closure line and ends
 `docket: OK -- checks ran clean (closure check skipped: no commits yet) and the fixture suite passed.`
-(exit 0, `47 passed, 19 skipped`):
+(exit 0, `47 passed, 31 skipped`):
 
 ```text
 docket: NOTICE -- closure check SKIPPED: the current branch has no commits yet.
@@ -110,7 +111,7 @@ docket:          It runs in CI, and here once there is history to check.
 In a shallow clone (`git clone --depth 1`) the notice reads `this is a shallow
 clone, where commit reachability cannot be decided` instead.
 
-**The 19 skipped tests** are the tests of the installer and uninstaller
+**The 31 skipped tests** are the tests of the installer and uninstaller
 themselves. They need `templates/`, which is not copied into your project, so
 the installed suite skips them with a stated reason instead of failing. They run
 in the Docket clone's own suite.
@@ -118,9 +119,9 @@ in the Docket clone's own suite.
 **Windows cost.** The suite builds a scratch Git repository per case, and Git
 subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
 install took between 26 s and 58 s on repeated runs into a one-commit or empty repository. Docket's own
-75-test suite, which also exercises the installer and uninstaller, took 16 minutes
-in one run that shared the machine with other work (its 66-test predecessor took
-7 minutes on an idle one); on Linux it takes a few seconds. Expect it to vary
+78-test suite, which also runs the installer and uninstaller many times, took
+25 minutes in one run on a machine shared with other work (an earlier 66-test
+version took 7 minutes on an idle one); on Linux it takes seconds. Expect it to vary
 with antivirus and disk, and do not interrupt it. If pytest is not installed
 the installer says so and reports the suite as pending rather than passed.
 
@@ -174,11 +175,12 @@ What it does, and does not do:
   `left in place (changed since install)` message.
 - Never deletes a directory wholesale. Your own files in `checks/` and `tests/`
   stay; a directory the installer created is removed only once it is empty.
-- Removes only Docket's marked block from the pre-commit hook the installer
-  modified, and only if both of its marker lines are still there. It acts on the
-  hook that Git resolves for this repository now (`core.hooksPath` and linked
-  worktrees are handled) and ignores a recorded hook path that differs. It
-  deletes the hook only if nothing but a shebang is left.
+- Removes only Docket's marked block from the pre-commit hook, and only if both of
+  its marker lines are still there. It asks Git where this repository's hook is
+  now, so a repository that has been renamed or moved since the install is still
+  found, and `core.hooksPath` and linked worktrees are handled. It deletes the
+  hook only if nothing but a shebang is left. A different file named in the
+  manifest that merely looks like Docket's block is left alone and reported.
 - Removes Docket's stanza from `.gitattributes` only if it is still exactly what
   was installed (opening line, closing line and text, checked against a hash taken
   at install time). If you have deleted the closing line or edited the stanza, the

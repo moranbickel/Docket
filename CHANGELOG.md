@@ -13,6 +13,7 @@ Installer and uninstaller, found by walking the quick start on Windows.
 - The uninstaller cuts the `.gitattributes` stanza only if it is still exactly as installed (hash stored in the manifest); otherwise it leaves the file alone and says what to remove by hand. It ignores manifest entries that are absolute, climb out of the repository, or name a hook other than this repository's.
 - The installer's preflight also refuses a directory where a file goes and a file where a directory goes, and recognises its own hook block by its exact marker line rather than the word `docket-checks`. A failure part-way still leaves a manifest.
 - The pre-commit hook no longer leaves `checks/__pycache__` in your tree.
+- The uninstaller finds the hook by asking Git where it is now and recognises Docket's block by its exact marker lines, so it still works after the repository directory is renamed or moved; the manifest records the hook path as Git spells it (relative to the repository where Git does), and the hook entry can be cleared. The `.gitattributes` cut removes exactly the one verified block.
 
 ## v0.2 - 2026-08-04
 
