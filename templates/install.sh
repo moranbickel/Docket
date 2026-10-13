@@ -39,6 +39,9 @@
 # the wrong ledger).
 set -eu
 
+# Print data verbatim: plain echo interprets backslashes in some shells (dash).
+say() { printf '%s\n' "$*"; }
+
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 SHARED_OK=0
 while [ $# -gt 0 ]; do
@@ -52,7 +55,7 @@ done
 TARGET="${1:?usage: install.sh [--shared-hook] /path/to/your-repo}"
 
 if ! git -C "$TARGET" rev-parse --show-toplevel >/dev/null 2>&1; then
-  echo "docket: ERROR: $TARGET is not a git worktree" >&2
+  say "docket: ERROR: $TARGET is not a git worktree" >&2
   exit 2
 fi
 TARGET="$(cd "$TARGET" && pwd -P)"
@@ -60,8 +63,8 @@ TARGET="$(cd "$TARGET" && pwd -P)"
 # level, so refuse anything else rather than install into a subdirectory.
 TOP="$(cd "$(git -C "$TARGET" rev-parse --show-toplevel)" && pwd -P)"
 if [ "$TARGET" != "$TOP" ]; then
-  echo "docket: ERROR: $TARGET is not the top level of its repository." >&2
-  echo "docket:        Pass the top level instead: $TOP" >&2
+  say "docket: ERROR: $TARGET is not the top level of its repository." >&2
+  say "docket:        Pass the top level instead: $TOP" >&2
   echo "docket:        nothing was written." >&2
   exit 2
 fi
@@ -125,7 +128,7 @@ ATTRS="$TARGET/.gitattributes"
 # file where a file goes, or is not a directory where a directory goes, is a
 # conflict too: writing into it would fail part-way.
 CONFLICTS=0
-conflict() { echo "docket: ERROR: $1" >&2; CONFLICTS=1; }
+conflict() { say "docket: ERROR: $1" >&2; CONFLICTS=1; }
 want_file() {   # a path that must be absent or a regular file
   if [ -e "$1" ] && [ ! -f "$1" ]; then conflict "$1 exists and is not a regular file -- refusing to write there."; fi
 }
@@ -194,7 +197,7 @@ if [ -f "$TARGET/DOCKET.md" ]; then
 else
   cp "$SRC/templates/DOCKET.md" "$TARGET/DOCKET.md"
   note_file "DOCKET.md"
-  echo "docket: starter ledger -> $TARGET/DOCKET.md"
+  say "docket: starter ledger -> $TARGET/DOCKET.md"
 fi
 
 # --- .gitattributes stanza --------------------------------------------------
@@ -239,12 +242,12 @@ shared_hook_reason() {
 }
 SHARED_REASON="$(shared_hook_reason)"
 if [ -f "$HOOK" ] && grep -q '^# --- docket-checks (installed by' "$HOOK" 2>/dev/null; then
-  echo "docket: pre-commit hook already installed at $HOOK"
+  say "docket: pre-commit hook already installed at $HOOK"
 elif [ -n "$SHARED_REASON" ] && [ "$SHARED_OK" != 1 ]; then
   echo "docket: NOTICE -- pre-commit hook NOT written: the hook may be shared with other checkouts."
-  printf '%s\n' "$SHARED_REASON" | while IFS= read -r _r; do echo "docket:   - $_r"; done
+  printf '%s\n' "$SHARED_REASON" | while IFS= read -r _r; do say "docket:   - $_r"; done
   echo "docket:   Docket's files are installed; its pre-commit check is not. To write the hook into"
-  echo "docket:   $HOOK anyway, re-run with --shared-hook. Removing it later is a manual step."
+  say "docket:   $HOOK anyway, re-run with --shared-hook. Removing it later is a manual step."
 else
   mkdir -p "$HOOKS_DIR"
   if [ ! -f "$HOOK" ]; then printf '#!/bin/sh\n' > "$HOOK"; fi
@@ -261,7 +264,7 @@ fi
 # --- end docket-checks ------------------------------------------------------
 EOF
   chmod +x "$HOOK"
-  echo "docket: pre-commit hook -> $HOOK"
+  say "docket: pre-commit hook -> $HOOK"
 fi
 
 # --- install manifest: merge with any earlier one, so a re-install keeps it --
@@ -280,7 +283,7 @@ flush_manifest
 # Do not leave bytecode or pytest caches behind in the adopter's tree.
 PYTHONDONTWRITEBYTECODE=1
 export PYTHONDONTWRITEBYTECODE
-echo "docket: verifying -- running the installed single-ledger checks against $TARGET"
+say "docket: verifying -- running the installed single-ledger checks against $TARGET"
 cd "$TARGET"
 
 "$PY" checks/check_duplicate_ids.py DOCKET.md
@@ -302,7 +305,7 @@ if [ -z "$SKIP_REASON" ]; then
   "$PY" checks/check_closure_references.py DOCKET.md
   CLOSURE_NOTE=""
 else
-  echo "docket: NOTICE -- closure check SKIPPED: $SKIP_REASON."
+  say "docket: NOTICE -- closure check SKIPPED: $SKIP_REASON."
   echo "docket:          It runs in CI, and here once there is history to check."
   CLOSURE_NOTE=" (closure check skipped: $SKIP_SHORT)"
 fi
@@ -317,7 +320,7 @@ fi
 # not start a second suite -- the suite installs, and the install would run
 # the suite, without end.
 if [ -n "${PYTEST_CURRENT_TEST:-}" ]; then
-  echo "docket: OK -- checks ran clean$CLOSURE_NOTE; suite skipped (already inside a test run)."
+  say "docket: OK -- checks ran clean$CLOSURE_NOTE; suite skipped (already inside a test run)."
 elif "$PY" -m pytest --version >/dev/null 2>&1; then
   # Say this BEFORE the silence starts. The suite spawns a git repository per
   # case, which is slow where git subprocesses are expensive (Windows) -- and
@@ -328,11 +331,11 @@ elif "$PY" -m pytest --version >/dev/null 2>&1; then
   echo "docket:   noticeably longer on Windows, where git subprocesses are far"
   echo "docket:   more expensive. Be patient; it is not hung."
   "$PY" -m pytest tests/test_checks.py -q -p no:cacheprovider
-  echo "docket: OK -- checks ran clean$CLOSURE_NOTE and the fixture suite passed."
+  say "docket: OK -- checks ran clean$CLOSURE_NOTE and the fixture suite passed."
 else
   echo "docket: NOTICE -- fixture suite NOT RUN (pytest is not installed here)."
   echo "docket:          the checks above DID run and are clean; the suite that"
   echo "docket:          arms them has not been executed on this machine. Run:"
-  echo "docket:              $PY -m pip install pytest && $PY -m pytest tests/test_checks.py"
-  echo "docket: OK -- checks ran clean$CLOSURE_NOTE; suite pending (see NOTICE above)."
+  say "docket:              $PY -m pip install pytest && $PY -m pytest tests/test_checks.py"
+  say "docket: OK -- checks ran clean$CLOSURE_NOTE; suite pending (see NOTICE above)."
 fi

@@ -9,11 +9,15 @@
 #     recorded at install time; a file you have changed is left in place, with
 #     a message (this includes DOCKET.md once you have added rows to it);
 #   * removes Docket's marked block from the pre-commit hook -- but only when
-#     that hook is this checkout's own: if core.hooksPath is set, the repository
-#     has linked worktrees, or the recorded hook is not the one Git resolves
-#     now, the whole uninstall is REFUSED (exit 2, nothing changed) with the
-#     manual steps; delete the block by hand, then re-run with --skip-hook, which
-#     is allowed only once no Docket block remains in the hook;
+#     that hook is this checkout's own and can be cut: if core.hooksPath is set,
+#     the repository has linked worktrees, the recorded hook is not the one Git
+#     resolves now, the hook carries a Docket block this checkout did not record
+#     writing, one of the block's two marker lines is missing, or both were edited
+#     while the hook still runs the installed checks/ scripts, the whole uninstall
+#     is REFUSED before any file is removed (exit 2, nothing changed) with the
+#     manual steps; delete the block by hand, then re-run (with --skip-hook where
+#     the reason is sharing), which is allowed only once no Docket block remains
+#     in the hook and it no longer runs the installed checks/ scripts;
 #   * removes Docket's stanza from .gitattributes only if it is still exactly
 #     what was installed (opening line, closing line and text, by hash); if it
 #     is not, the file is left untouched and you are told what to remove;
@@ -114,7 +118,10 @@ refuse() {   # refuse <headline>; prints the manual steps and exits 2
   echo "docket:   checkout's files first would break commits, and removing the block disarms Docket's"
   echo "docket:   pre-commit check for every checkout that uses that hook file. If you accept that:"
   echo "docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'"
-  echo "docket:        through '# --- end docket-checks';"
+  echo "docket:        through '# --- end docket-checks'. If one of those two marker lines is missing or"
+  echo "docket:        was edited, delete every remaining Docket line instead: everything from where Docket's"
+  echo "docket:        block started to where it ended, including any if/fi lines around it. If unsure,"
+  echo "docket:        restore the hook to the content it had before the install;"
   say "docket:     2. re-run: sh uninstall.sh --skip-hook $TARGET"
   echo "docket:   Otherwise leave Docket installed here."
   exit 2
@@ -137,16 +144,45 @@ if [ -z "$HOOK_RECORDED" ] && has_block "$EXPECTED_HOOK"; then
   REASONS="$REASONS
 the hook Git resolves carries a Docket block that this checkout's manifest did not record writing"
 fi
+# A block the cutter cannot recognise: one marker line missing, or both edited
+# while the hook still runs Docket's installed check scripts. Either way, removing
+# checks/ first would leave a hook calling scripts that are gone.
+CHECK_SCRIPTS="$(awk -F "$TAB" '$1 == "file" && $3 ~ "^checks/.*[.]py$" { print $3 }' "$MANIFEST")"
+hook_runs_docket_checks() {
+  [ -f "$1" ] || return 1
+  while IFS= read -r _c; do
+    [ -n "$_c" ] || continue
+    if grep -qF -- "$_c" "$1"; then return 0; fi
+  done <<EOF
+$CHECK_SCRIPTS
+EOF
+  return 1
+}
+if [ -f "$EXPECTED_HOOK" ]; then
+  _s=0; _e=0
+  if grep -q '^# --- docket-checks (installed by' "$EXPECTED_HOOK"; then _s=1; fi
+  if grep -q '^# --- end docket-checks' "$EXPECTED_HOOK"; then _e=1; fi
+  if [ "$_s" != "$_e" ]; then
+    REASONS="$REASONS
+the hook Git resolves carries a Docket block with one of its marker lines missing"
+  elif [ "$_s" = 0 ] && hook_runs_docket_checks "$EXPECTED_HOOK"; then
+    REASONS="$REASONS
+the hook Git resolves runs Docket's installed check scripts, but no Docket marker lines are left to cut"
+  fi
+fi
 NEEDS_HOOK=0
-if [ -n "$HOOK_RECORDED" ] || has_block "$EXPECTED_HOOK"; then NEEDS_HOOK=1; fi
+if [ -n "$HOOK_RECORDED" ] || has_block "$EXPECTED_HOOK" || hook_runs_docket_checks "$EXPECTED_HOOK"; then NEEDS_HOOK=1; fi
 HOOK_MODE=normal
 if [ "$SKIP_HOOK" = 1 ]; then
   if has_block "$EXPECTED_HOOK" || [ -n "$RECORDED_BLOCKS" ]; then
     refuse "--skip-hook is only allowed once no Docket block remains in the hook, and one does (${RECORDED_BLOCKS:-$EXPECTED_HOOK})."
   fi
+  if hook_runs_docket_checks "$EXPECTED_HOOK"; then
+    refuse "--skip-hook is only allowed once the hook no longer runs Docket's check scripts, and it still does ($EXPECTED_HOOK)."
+  fi
   HOOK_MODE=skip
 elif [ "$NEEDS_HOOK" = 1 ] && [ -n "$(say "$REASONS" | tr -d '[:space:]')" ]; then
-  refuse "There is a Docket hook to deal with, and it may be shared, is not the one recorded, or was not recorded by this checkout."
+  refuse "There is a Docket hook to deal with, and it may be shared, is not the one recorded, was not recorded by this checkout, or cannot be cut."
 fi
 
 # A manifest path is usable only if it is relative, has no ".." component, and

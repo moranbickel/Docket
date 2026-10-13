@@ -1664,6 +1664,159 @@ def test_refusal_prints_a_backslash_hooks_path_verbatim_under_dash(tmp_path):
     assert "core.hooksPath is set (C:\\temp\\hooks9)" in r.stdout, r.stdout
 
 
+# ------------------- hook the uninstaller cannot cut: detect it before removing
+
+def _edit_hook(path: Path, edit):
+    text = path.read_text(encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(edit(text))
+
+
+@installer_test
+def test_installer_notice_prints_a_backslash_hooks_path_verbatim_under_dash(tmp_path):
+    """The installer's NOTICE names the hook file the user would write into, so
+    a backslash in core.hooksPath must reach them unchanged where `echo`
+    interprets escapes (dash).
+
+    Protects: the NOTICE, an action surface. Without printf on those lines,
+    dash turns the `\\t` of `C:\\temp\\hooks9` into a tab and the user is told
+    to write into a path that does not exist."""
+    dash = _shutil.which("dash")
+    if dash is None:
+        pytest.skip("dash is not installed here; the escape-sequence case needs it")
+    target = _adopter_with_user_files(tmp_path)
+    _g(target, "config", "core.hooksPath", "C:\\temp\\hooks9")
+    r = subprocess.run([dash, INSTALLER.as_posix(), target.as_posix()],
+                       capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "core.hooksPath is set (C:\\temp\\hooks9)" in r.stdout, r.stdout
+    assert "C:\\temp\\hooks9/pre-commit anyway" in r.stdout, r.stdout
+
+
+@installer_test
+def test_a_half_block_is_refused_before_any_file_is_removed(tmp_path):
+    """One of Docket's two marker lines was deleted by the user. The uninstaller
+    cannot cut the block, so it must say so BEFORE removing checks/.
+
+    Protects: the next commit. Without it, checks/ is removed first and the
+    block is found uncuttable afterwards, leaving a hook that calls scripts that
+    are gone (this test ends in a commit that must pass after the printed step)."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    hook = _hook_path(target)
+    _edit_hook(hook, lambda t: "".join(
+        ln for ln in t.splitlines(keepends=True) if not ln.startswith(END_MARK)))
+    _add_row(target)
+    before = (_tree(target), _snapshot(hook))
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "nothing was changed" in r.stdout.lower() and "marker" in r.stdout, r.stdout
+    assert (_tree(target), _snapshot(hook)) == before
+    _edit_hook(hook, lambda t: "#!/bin/sh\n")            # the printed manual step
+    done = _run_installer(UNINSTALLER, target)
+    assert done.returncode == 0, done.stdout + done.stderr
+    _commit(target, "after uninstall", {"n.txt": "n\n"})
+
+
+@installer_test
+def test_edited_marker_lines_that_still_run_the_checks_are_refused(tmp_path):
+    """Both marker lines were edited, so no block is recognised, but the hook
+    still runs Docket's check scripts. The uninstaller must refuse before
+    removing them, not report "nothing to remove".
+
+    Protects: the next commit. Without it, the uninstaller finds no block,
+    removes checks/ and clears the hook entry, and the hook keeps calling the
+    removed scripts with nothing pointing at the hook (this test ends in a
+    commit that must pass after the printed step)."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    hook = _hook_path(target)
+    _edit_hook(hook, lambda t: t.replace(START_MARK, "# docket checks (installed by")
+               .replace(END_MARK, "# end of docket checks"))
+    _add_row(target)
+    before = (_tree(target), _snapshot(hook))
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "nothing was changed" in r.stdout.lower() and "checks/" in r.stdout, r.stdout
+    assert (_tree(target), _snapshot(hook)) == before
+    blocked = _run_installer(UNINSTALLER, target, "--skip-hook")
+    assert blocked.returncode == 2, blocked.stdout + blocked.stderr  # still runs them
+    _edit_hook(hook, lambda t: "#!/bin/sh\n")
+    done = _run_installer(UNINSTALLER, target)
+    assert done.returncode == 0, done.stdout + done.stderr
+    _commit(target, "after uninstall", {"n.txt": "n\n"})
+
+
+def _printed_text(stdout: str) -> str:
+    """The script's lines joined into running text (prefixes dropped), so a
+    phrase that wraps across two printed lines can still be asserted."""
+    return " ".join(_re.sub(r"^docket:\s*", "", ln).strip() for ln in stdout.splitlines())
+
+
+def _delete_lines_between(path: Path, first, last):
+    """What the printed instruction asks, taken literally: delete everything
+    from the line where Docket's block started through the line where it ended."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    start = next(i for i, ln in enumerate(lines) if first(ln))
+    end = next(i for i in range(start, len(lines)) if last(lines[i]))
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write("".join(lines[:start] + lines[end + 1:]))
+
+
+@installer_test
+def test_printed_instruction_followed_literally_leaves_a_working_hook_half_block(tmp_path):
+    """The refusal's manual step, followed to the letter for a hook with one
+    marker line deleted, leaves a hook that is valid shell and a repo that
+    commits.
+
+    Protects: the text users act on. A step that says only "delete the lines
+    that run checks/ scripts" leaves the `if ...; then` / `fi` behind, which
+    is a shell syntax error on every later commit. Here the user deletes
+    everything from where the block started to where it ended (through its
+    `fi`), and the text must say to."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    hook = _hook_path(target)
+    _edit_hook(hook, lambda t: "".join(
+        ln for ln in t.splitlines(keepends=True) if not ln.startswith(END_MARK)))
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 2, r.stdout + r.stderr
+    printed = _printed_text(r.stdout)
+    for phrase in ("everything from where Docket's block started to where it ended",
+                   "if/fi", "before the install"):
+        assert phrase in printed, (phrase, r.stdout)
+    _delete_lines_between(hook, lambda ln: ln.startswith(START_MARK),
+                          lambda ln: ln.strip() == "fi")
+    done = _run_installer(UNINSTALLER, target)
+    assert done.returncode == 0, done.stdout + done.stderr
+    _commit(target, "after the printed step", {"n.txt": "n\n"})
+
+
+@installer_test
+def test_printed_instruction_followed_literally_leaves_a_working_hook_both_edited(tmp_path):
+    """The same, for both marker lines edited: the user deletes from the edited
+    opening comment through the edited closing comment, `if ... fi` included.
+
+    Protects: the same text and the same commit, on the second shape. Without
+    it only the half-block wording is exercised."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    hook = _hook_path(target)
+    _edit_hook(hook, lambda t: t.replace(START_MARK, "# docket checks (installed by")
+               .replace(END_MARK, "# end of docket checks"))
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 2, r.stdout + r.stderr
+    printed = _printed_text(r.stdout)
+    for phrase in ("everything from where Docket's block started to where it ended",
+                   "if/fi", "before the install"):
+        assert phrase in printed, (phrase, r.stdout)
+    _delete_lines_between(hook, lambda ln: ln.startswith("# docket checks (installed by"),
+                          lambda ln: ln.startswith("# end of docket checks"))
+    done = _run_installer(UNINSTALLER, target)
+    assert done.returncode == 0, done.stdout + done.stderr
+    _commit(target, "after the printed step", {"n.txt": "n\n"})
+
+
 # ------------------------------------------- state transitions over a range
 
 def _repo_with_midrange_reopen(tmp_path: Path, reopen_note: str):
