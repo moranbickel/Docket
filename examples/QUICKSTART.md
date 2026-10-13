@@ -107,16 +107,16 @@ docket: running the fixture suite that arms these checks. It builds a
 docket:   scratch git repo per case: a few seconds on Linux/macOS, and
 docket:   noticeably longer on Windows, where git subprocesses are far
 docket:   more expensive. Be patient; it is not hung.
-..............................sssssssssssssssssssssssssssssssssssssssss. [ 81%]
-................                                                         [100%]
-47 passed, 41 skipped in 15.45s
+..............................ssssssssssssssssssssssssssssssssssssssssss [ 79%]
+ss.................                                                      [100%]
+47 passed, 44 skipped in 44.81s
 docket: OK -- checks ran clean and the fixture suite passed.
 ```
 
 Into a repository whose current branch has **no commits yet**, the same install
 prints the notice below in place of the closure line and ends
 `docket: OK -- checks ran clean (closure check skipped: no commits yet) and the fixture suite passed.`
-(exit 0, `47 passed, 41 skipped`):
+(exit 0, `47 passed, 44 skipped`):
 
 ```text
 docket: NOTICE -- closure check SKIPPED: the current branch has no commits yet.
@@ -126,7 +126,7 @@ docket:          It runs in CI, and here once there is history to check.
 In a shallow clone (`git clone --depth 1`) the notice reads `this is a shallow
 clone, where commit reachability cannot be decided` instead.
 
-**The 41 skipped tests** are the tests of the installer and uninstaller
+**The 44 skipped tests** are the tests of the installer and uninstaller
 themselves. They need `templates/`, which is not copied into your project, so
 the installed suite skips them with a stated reason instead of failing. They run
 in the Docket clone's own suite.
@@ -134,8 +134,8 @@ in the Docket clone's own suite.
 **Windows cost.** The suite builds a scratch Git repository per case, and Git
 subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
 install took between 26 s and 58 s on repeated runs into a one-commit or empty repository. Docket's own
-88-test suite, which also runs the installer and uninstaller many times, took
-13 minutes in one run on a machine shared with other work (earlier, smaller
+91-test suite, which also runs the installer and uninstaller many times, took
+25 minutes in one run on a machine shared with other work (earlier, smaller
 versions took between 7 and 25 minutes); on Linux it takes seconds. Expect it to vary
 with antivirus and disk, and do not interrupt it. If pytest is not installed
 the installer says so and reports the suite as pending rather than passed.
@@ -258,14 +258,16 @@ Docket's block (exit 2; no file, hook or manifest was touched):
 
 ```text
 docket: REFUSING to uninstall -- nothing was changed.
-docket:   There is a Docket hook to deal with, and it may be shared, is not the one recorded, or was not recorded by this checkout.
+docket:   There is a Docket hook to deal with, and it may be shared, is not the one recorded, was not recorded by this checkout, or cannot be cut.
 docket:   - core.hooksPath is set (/path/to/shared-hooks)
 docket:   The hook Git resolves for this repository is: /path/to/shared-hooks/pre-commit
 docket:   Docket's block there calls checks/ in whichever checkout commits, so removing this
 docket:   checkout's files first would break commits, and removing the block disarms Docket's
 docket:   pre-commit check for every checkout that uses that hook file. If you accept that:
 docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'
-docket:        through '# --- end docket-checks';
+docket:        through '# --- end docket-checks'. If one of those two marker lines is missing or
+docket:        was edited, delete the Docket lines that remain instead: the ones that run
+docket:        checks/check_duplicate_ids.py and the other installed checks/ scripts;
 docket:     2. re-run: sh uninstall.sh --skip-hook /path/to/your-repo
 docket:   Otherwise leave Docket installed here.
 ```
@@ -293,11 +295,23 @@ that follow are as above):
 
 ```text
 docket: REFUSING to uninstall -- nothing was changed.
-docket:   There is a Docket hook to deal with, and it may be shared, is not the one recorded, or was not recorded by this checkout.
+docket:   There is a Docket hook to deal with, and it may be shared, is not the one recorded, was not recorded by this checkout, or cannot be cut.
 docket:   - the hook Git resolves carries a Docket block that this checkout's manifest did not record writing
 docket:   The hook Git resolves for this repository is: /path/to/your-repo/.git/hooks/pre-commit
 ```
 
+
+The same refusal covers a hook the script cannot cut, so it never removes `checks/`
+first and then fails: if you have deleted one of Docket's two marker lines, or edited
+both while the hook still runs Docket's `checks/` scripts, the uninstall refuses
+before touching anything (exit 2) and the manual step is the one above (delete the
+Docket lines that remain). Real output for a deleted end marker (first three lines):
+
+```text
+docket: REFUSING to uninstall -- nothing was changed.
+docket:   There is a Docket hook to deal with, and it may be shared, is not the one recorded, was not recorded by this checkout, or cannot be cut.
+docket:   - the hook Git resolves carries a Docket block with one of its marker lines missing
+```
 
 One more limit: the manifest belongs to this clone. A fresh clone of your
 repository has the committed files but no manifest, so run the uninstaller in the

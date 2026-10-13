@@ -114,7 +114,9 @@ refuse() {   # refuse <headline>; prints the manual steps and exits 2
   echo "docket:   checkout's files first would break commits, and removing the block disarms Docket's"
   echo "docket:   pre-commit check for every checkout that uses that hook file. If you accept that:"
   echo "docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'"
-  echo "docket:        through '# --- end docket-checks';"
+  echo "docket:        through '# --- end docket-checks'. If one of those two marker lines is missing or"
+  echo "docket:        was edited, delete the Docket lines that remain instead: the ones that run"
+  echo "docket:        checks/check_duplicate_ids.py and the other installed checks/ scripts;"
   say "docket:     2. re-run: sh uninstall.sh --skip-hook $TARGET"
   echo "docket:   Otherwise leave Docket installed here."
   exit 2
@@ -137,16 +139,45 @@ if [ -z "$HOOK_RECORDED" ] && has_block "$EXPECTED_HOOK"; then
   REASONS="$REASONS
 the hook Git resolves carries a Docket block that this checkout's manifest did not record writing"
 fi
+# A block the cutter cannot recognise: one marker line missing, or both edited
+# while the hook still runs Docket's installed check scripts. Either way, removing
+# checks/ first would leave a hook calling scripts that are gone.
+CHECK_SCRIPTS="$(awk -F "$TAB" '$1 == "file" && $3 ~ "^checks/.*[.]py$" { print $3 }' "$MANIFEST")"
+hook_runs_docket_checks() {
+  [ -f "$1" ] || return 1
+  while IFS= read -r _c; do
+    [ -n "$_c" ] || continue
+    if grep -qF -- "$_c" "$1"; then return 0; fi
+  done <<EOF
+$CHECK_SCRIPTS
+EOF
+  return 1
+}
+if [ -f "$EXPECTED_HOOK" ]; then
+  _s=0; _e=0
+  if grep -q '^# --- docket-checks (installed by' "$EXPECTED_HOOK"; then _s=1; fi
+  if grep -q '^# --- end docket-checks' "$EXPECTED_HOOK"; then _e=1; fi
+  if [ "$_s" != "$_e" ]; then
+    REASONS="$REASONS
+the hook Git resolves carries a Docket block with one of its marker lines missing"
+  elif [ "$_s" = 0 ] && hook_runs_docket_checks "$EXPECTED_HOOK"; then
+    REASONS="$REASONS
+the hook Git resolves runs Docket's installed check scripts, but no Docket marker lines are left to cut"
+  fi
+fi
 NEEDS_HOOK=0
-if [ -n "$HOOK_RECORDED" ] || has_block "$EXPECTED_HOOK"; then NEEDS_HOOK=1; fi
+if [ -n "$HOOK_RECORDED" ] || has_block "$EXPECTED_HOOK" || hook_runs_docket_checks "$EXPECTED_HOOK"; then NEEDS_HOOK=1; fi
 HOOK_MODE=normal
 if [ "$SKIP_HOOK" = 1 ]; then
   if has_block "$EXPECTED_HOOK" || [ -n "$RECORDED_BLOCKS" ]; then
     refuse "--skip-hook is only allowed once no Docket block remains in the hook, and one does (${RECORDED_BLOCKS:-$EXPECTED_HOOK})."
   fi
+  if hook_runs_docket_checks "$EXPECTED_HOOK"; then
+    refuse "--skip-hook is only allowed once the hook no longer runs Docket's check scripts, and it still does ($EXPECTED_HOOK)."
+  fi
   HOOK_MODE=skip
 elif [ "$NEEDS_HOOK" = 1 ] && [ -n "$(say "$REASONS" | tr -d '[:space:]')" ]; then
-  refuse "There is a Docket hook to deal with, and it may be shared, is not the one recorded, or was not recorded by this checkout."
+  refuse "There is a Docket hook to deal with, and it may be shared, is not the one recorded, was not recorded by this checkout, or cannot be cut."
 fi
 
 # A manifest path is usable only if it is relative, has no ".." component, and
