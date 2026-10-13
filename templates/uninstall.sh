@@ -27,6 +27,9 @@
 # repository's top level and says so. Running it twice is harmless.
 set -eu
 
+# Print data verbatim: plain echo interprets backslashes in some shells (dash).
+say() { printf '%s\n' "$*"; }
+
 SKIP_HOOK=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -38,13 +41,13 @@ while [ $# -gt 0 ]; do
 done
 TARGET="${1:?usage: uninstall.sh [--skip-hook] /path/to/your-repo}"
 if ! git -C "$TARGET" rev-parse --show-toplevel >/dev/null 2>&1; then
-  echo "docket: ERROR: $TARGET is not a git worktree" >&2
+  say "docket: ERROR: $TARGET is not a git worktree" >&2
   exit 2
 fi
 GIVEN="$(cd "$TARGET" && pwd -P)"
 TARGET="$(cd "$(git -C "$GIVEN" rev-parse --show-toplevel)" && pwd -P)"
 if [ "$GIVEN" != "$TARGET" ]; then
-  echo "docket: note: $GIVEN is inside the repository whose top level is $TARGET; using the top level."
+  say "docket: note: $GIVEN is inside the repository whose top level is $TARGET; using the top level."
 fi
 
 abs_git_path() {
@@ -58,7 +61,7 @@ MANIFEST="$(abs_git_path docket-install.manifest)"
 EXPECTED_HOOK="$(abs_git_path hooks)/pre-commit"
 
 if [ ! -f "$MANIFEST" ]; then
-  echo "docket: nothing to uninstall -- no install manifest for this working tree ($MANIFEST)."
+  say "docket: nothing to uninstall -- no install manifest for this working tree ($MANIFEST)."
   exit 0
 fi
 
@@ -83,9 +86,9 @@ printf '# docket install manifest v1\n' > "$KEEP"
 # (shared_hook_reason is the same function as in install.sh; keep them in step.)
 shared_hook_reason() {
   _hp="$(git -C "$TARGET" config --get core.hooksPath 2>/dev/null || true)"
-  if [ -n "$_hp" ]; then echo "core.hooksPath is set ($_hp)"; fi
+  if [ -n "$_hp" ]; then say "core.hooksPath is set ($_hp)"; fi
   _wt="$(git -C "$TARGET" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
-  if [ "${_wt:-1}" -gt 1 ]; then echo "the repository has linked worktrees ($_wt checkouts share one hooks directory)"; fi
+  if [ "${_wt:-1}" -gt 1 ]; then say "the repository has linked worktrees ($_wt checkouts share one hooks directory)"; fi
 }
 has_block() {
   [ -f "$1" ] || return 1
@@ -94,25 +97,25 @@ has_block() {
 }
 hook_abs() {
   case "$1" in
-    /*|[A-Za-z]:*) echo "$1" ;;
-    *) echo "$TARGET/$1" ;;
+    /*|[A-Za-z]:*) say "$1" ;;
+    *) say "$TARGET/$1" ;;
   esac
 }
 refuse() {   # refuse <headline>; prints the manual steps and exits 2
   echo "docket: REFUSING to uninstall -- nothing was changed."
-  echo "docket:   $1"
+  say "docket:   $1"
   if [ -n "$REASONS" ]; then
-    echo "$REASONS" | while IFS= read -r _r; do
-      if [ -n "$_r" ]; then echo "docket:   - $_r"; fi
+    say "$REASONS" | while IFS= read -r _r; do
+      if [ -n "$_r" ]; then say "docket:   - $_r"; fi
     done
   fi
-  echo "docket:   The hook Git resolves for this repository is: $EXPECTED_HOOK"
+  say "docket:   The hook Git resolves for this repository is: $EXPECTED_HOOK"
   echo "docket:   Docket's block there calls checks/ in whichever checkout commits, so removing this"
   echo "docket:   checkout's files first would break commits, and removing the block disarms Docket's"
   echo "docket:   pre-commit check for every checkout that uses that hook file. If you accept that:"
   echo "docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'"
   echo "docket:        through '# --- end docket-checks';"
-  echo "docket:     2. re-run: sh uninstall.sh --skip-hook $TARGET"
+  say "docket:     2. re-run: sh uninstall.sh --skip-hook $TARGET"
   echo "docket:   Otherwise leave Docket installed here."
   exit 2
 }
@@ -130,6 +133,10 @@ the manifest recorded the hook $_abs, but Git resolves $EXPECTED_HOOK now"
 done <<EOF
 $HOOK_RECORDED
 EOF
+if [ -z "$HOOK_RECORDED" ] && has_block "$EXPECTED_HOOK"; then
+  REASONS="$REASONS
+the hook Git resolves carries a Docket block that this checkout's manifest did not record writing"
+fi
 NEEDS_HOOK=0
 if [ -n "$HOOK_RECORDED" ] || has_block "$EXPECTED_HOOK"; then NEEDS_HOOK=1; fi
 HOOK_MODE=normal
@@ -138,8 +145,8 @@ if [ "$SKIP_HOOK" = 1 ]; then
     refuse "--skip-hook is only allowed once no Docket block remains in the hook, and one does (${RECORDED_BLOCKS:-$EXPECTED_HOOK})."
   fi
   HOOK_MODE=skip
-elif [ "$NEEDS_HOOK" = 1 ] && [ -n "$(echo "$REASONS" | tr -d '[:space:]')" ]; then
-  refuse "There is a Docket hook to deal with, and it may be shared or is not the one recorded."
+elif [ "$NEEDS_HOOK" = 1 ] && [ -n "$(say "$REASONS" | tr -d '[:space:]')" ]; then
+  refuse "There is a Docket hook to deal with, and it may be shared, is not the one recorded, or was not recorded by this checkout."
 fi
 
 # A manifest path is usable only if it is relative, has no ".." component, and
@@ -161,7 +168,7 @@ while IFS="$TAB" read -r kind a b || [ -n "$kind" ]; do
     file)
       rel="$b"; want="$a"; path="$TARGET/$rel"
       if ! safe_rel "$rel"; then
-        echo "docket: ignored manifest entry (path is outside this repository): $rel"
+        say "docket: ignored manifest entry (path is outside this repository): $rel"
         printf 'file\t%s\t%s\n' "$want" "$rel" >> "$KEEP"
         continue
       fi
@@ -171,7 +178,7 @@ while IFS="$TAB" read -r kind a b || [ -n "$kind" ]; do
       have="$(git -C "$TARGET" hash-object --no-filters -- "$path")"
       if [ "$have" = "$want" ]; then
         rm -f "$path"
-        echo "docket: removed $rel"
+        say "docket: removed $rel"
         case "$rel" in
           *.py)   # bytecode of this script only, never a neighbour's
             d="$(dirname "$path")"; stem="$(basename "$rel" .py)"
@@ -181,14 +188,14 @@ while IFS="$TAB" read -r kind a b || [ -n "$kind" ]; do
             rmdir "$d/__pycache__" 2>/dev/null || true ;;
         esac
       else
-        echo "docket: left in place (changed since install): $rel"
+        say "docket: left in place (changed since install): $rel"
         printf 'file\t%s\t%s\n' "$want" "$rel" >> "$KEEP"
       fi ;;
     dir)
       if safe_rel "$a" && [ "$a" != "." ]; then
         printf '%s\n' "$a" >> "$DIRS"
       else
-        echo "docket: ignored manifest entry (directory is outside this repository): $a"
+        say "docket: ignored manifest entry (directory is outside this repository): $a"
         printf 'dir\t%s\n' "$a" >> "$KEEP"
       fi ;;
     hook) printf '%s\n' "$a" >> "$HOOKS" ;;
@@ -220,14 +227,14 @@ remove_hook_block() {   # remove_hook_block <hook file>; returns 1 if left as is
     cat "$WORK/hook.new" > "$hook"
     if awk 'NF && !/^#!/ { n++ } END { exit (n > 0) }' "$hook"; then
       rm -f "$hook"
-      echo "docket: removed pre-commit hook $hook (nothing else was in it)"
+      say "docket: removed pre-commit hook $hook (nothing else was in it)"
     else
-      echo "docket: removed Docket's block from $hook (your other hook lines are kept)"
+      say "docket: removed Docket's block from $hook (your other hook lines are kept)"
     fi
   elif [ "$has_start" = 0 ] && [ "$has_end" = 0 ]; then
-    echo "docket: no Docket block found in $hook -- nothing to remove"
+    say "docket: no Docket block found in $hook -- nothing to remove"
   else
-    echo "docket: Docket's block in $hook is missing one of its marker lines -- left as is."
+    say "docket: Docket's block in $hook is missing one of its marker lines -- left as is."
     echo "docket:   remove the lines from '# --- docket-checks' to '# --- end docket-checks' by hand."
     return 1
   fi
@@ -285,9 +292,9 @@ sort -r "$DIRS" | while IFS= read -r d; do
   [ -n "$d" ] || continue
   [ -d "$TARGET/$d" ] || continue
   if rmdir "$TARGET/$d" 2>/dev/null; then
-    echo "docket: removed empty directory $d/"
+    say "docket: removed empty directory $d/"
   else
-    echo "docket: kept $d/ (it still holds other files)"
+    say "docket: kept $d/ (it still holds other files)"
     # Keep tracking it if a changed Docket file still lives under it.
     if awk -F "$TAB" -v d="$d/" 'index($3, d) == 1 { f = 1 } END { exit !f }' "$KEEP"; then
       printf 'dir\t%s\n' "$d" >> "$KEEP"

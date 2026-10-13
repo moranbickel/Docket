@@ -1577,6 +1577,93 @@ def test_hook_cut_stops_after_the_one_block_it_wrote(tmp_path):
     assert hook.read_text(encoding="utf-8") == "#!/bin/sh\n" + user
 
 
+# ----------------------- a Docket block this checkout did not record writing
+
+@installer_test
+def test_block_written_from_a_removed_worktree_is_not_left_behind(tmp_path):
+    """The hook was written from a linked worktree (--shared-hook), whose
+    per-worktree manifest disappeared with the worktree. The main checkout's
+    uninstall must refuse, not remove checks/ and leave a hook that calls them.
+
+    Protects: the main checkout's next commit. Without it, the block has no
+    entry in the main manifest and no sharing reason is left once the worktree
+    is gone, so the uninstaller removes checks/, keeps the block, says nothing,
+    and every later commit fails with a missing script (this test ends in a
+    commit that must pass after the printed steps are followed)."""
+    main = _adopter_with_user_files(tmp_path)
+    wt = tmp_path / "wt"
+    _g(main, "worktree", "add", "-q", "-b", "feature", str(wt))
+    assert _run_installer(INSTALLER, main).returncode == 0       # hook NOT written
+    assert _run_installer(INSTALLER, wt, "--shared-hook").returncode == 0
+    hook = _hook_path(main)
+    assert START_MARK in hook.read_text(encoding="utf-8")
+    assert "hook\t" not in _manifest_path(main).read_text(encoding="utf-8")
+    _add_row(main)
+    _g(main, "worktree", "remove", "--force", str(wt))
+    before = (_tree(main), _snapshot(hook))
+    r = _run_installer(UNINSTALLER, main)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "nothing was changed" in r.stdout.lower() and "--skip-hook" in r.stdout, r.stdout
+    assert (_tree(main), _snapshot(hook)) == before
+    _strip_block(hook)                                  # the printed manual step
+    done = _run_installer(UNINSTALLER, main, "--skip-hook")
+    assert done.returncode == 0, done.stdout + done.stderr
+    _commit(main, "main after uninstall", {"m.txt": "m\n"})
+
+
+@installer_test
+def test_a_block_copied_in_by_hand_is_not_left_behind(tmp_path):
+    """A hook that already held Docket's block before the install (copied from
+    another repository) leaves this manifest with no hook entry; the uninstall
+    must refuse rather than delete checks/ under it.
+
+    Protects: the same consequence as above on a second shape. Without it the
+    installer says "already installed", writes no entry, and the uninstaller
+    removes checks/ without a word about the block; the next commit fails."""
+    donor = _adopter_with_user_files(tmp_path / "donor-root")
+    assert _run_installer(INSTALLER, donor).returncode == 0
+    block = _hook_path(donor).read_text(encoding="utf-8")
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "x\n"})
+    hook = _hook_path(target)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    with hook.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(block)
+    i = _run_installer(INSTALLER, target)
+    assert i.returncode == 0 and "already installed" in i.stdout, i.stdout
+    assert "hook\t" not in _manifest_path(target).read_text(encoding="utf-8")
+    before = (_tree(target), _snapshot(hook))
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert (_tree(target), _snapshot(hook)) == before
+    _strip_block(hook)
+    done = _run_installer(UNINSTALLER, target, "--skip-hook")
+    assert done.returncode == 0, done.stdout + done.stderr
+    _commit(target, "after uninstall", {"n.txt": "n\n"})
+
+
+@installer_test
+def test_refusal_prints_a_backslash_hooks_path_verbatim_under_dash(tmp_path):
+    """The refusal text is what the user acts on, so a backslash in
+    core.hooksPath must reach them unchanged even where `echo` interprets
+    escapes (dash).
+
+    Protects: the manual steps. Without printf in shared_hook_reason, dash turns
+    the `\\t` of `C:\\temp\\hooks` into a tab and the user is told to open a
+    path that does not exist."""
+    dash = _shutil.which("dash")
+    if dash is None:
+        pytest.skip("dash is not installed here; the escape-sequence case needs it")
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    _g(target, "config", "core.hooksPath", "C:\\temp\\hooks9")
+    r = subprocess.run(
+        [dash, UNINSTALLER.as_posix(), target.as_posix()],
+        capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "core.hooksPath is set (C:\\temp\\hooks9)" in r.stdout, r.stdout
+
+
 # ------------------------------------------- state transitions over a range
 
 def _repo_with_midrange_reopen(tmp_path: Path, reopen_note: str):

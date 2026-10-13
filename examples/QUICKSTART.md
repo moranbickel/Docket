@@ -107,16 +107,16 @@ docket: running the fixture suite that arms these checks. It builds a
 docket:   scratch git repo per case: a few seconds on Linux/macOS, and
 docket:   noticeably longer on Windows, where git subprocesses are far
 docket:   more expensive. Be patient; it is not hung.
-..............................ssssssssssssssssssssssssssssssssssssss.... [ 84%]
-.............                                                            [100%]
-47 passed, 38 skipped in 57.29s
+..............................sssssssssssssssssssssssssssssssssssssssss. [ 81%]
+................                                                         [100%]
+47 passed, 41 skipped in 15.45s
 docket: OK -- checks ran clean and the fixture suite passed.
 ```
 
 Into a repository whose current branch has **no commits yet**, the same install
 prints the notice below in place of the closure line and ends
 `docket: OK -- checks ran clean (closure check skipped: no commits yet) and the fixture suite passed.`
-(exit 0, `47 passed, 38 skipped`):
+(exit 0, `47 passed, 41 skipped`):
 
 ```text
 docket: NOTICE -- closure check SKIPPED: the current branch has no commits yet.
@@ -126,7 +126,7 @@ docket:          It runs in CI, and here once there is history to check.
 In a shallow clone (`git clone --depth 1`) the notice reads `this is a shallow
 clone, where commit reachability cannot be decided` instead.
 
-**The 38 skipped tests** are the tests of the installer and uninstaller
+**The 41 skipped tests** are the tests of the installer and uninstaller
 themselves. They need `templates/`, which is not copied into your project, so
 the installed suite skips them with a stated reason instead of failing. They run
 in the Docket clone's own suite.
@@ -134,8 +134,8 @@ in the Docket clone's own suite.
 **Windows cost.** The suite builds a scratch Git repository per case, and Git
 subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
 install took between 26 s and 58 s on repeated runs into a one-commit or empty repository. Docket's own
-85-test suite, which also runs the installer and uninstaller many times, took
-19 minutes in one run on a machine shared with other work (earlier, smaller
+88-test suite, which also runs the installer and uninstaller many times, took
+13 minutes in one run on a machine shared with other work (earlier, smaller
 versions took between 7 and 25 minutes); on Linux it takes seconds. Expect it to vary
 with antivirus and disk, and do not interrupt it. If pytest is not installed
 the installer says so and reports the suite as pending rather than passed.
@@ -258,7 +258,7 @@ Docket's block (exit 2; no file, hook or manifest was touched):
 
 ```text
 docket: REFUSING to uninstall -- nothing was changed.
-docket:   There is a Docket hook to deal with, and it may be shared or is not the one recorded.
+docket:   There is a Docket hook to deal with, and it may be shared, is not the one recorded, or was not recorded by this checkout.
 docket:   - core.hooksPath is set (/path/to/shared-hooks)
 docket:   The hook Git resolves for this repository is: /path/to/shared-hooks/pre-commit
 docket:   Docket's block there calls checks/ in whichever checkout commits, so removing this
@@ -283,7 +283,21 @@ sh Docket/templates/uninstall.sh --skip-hook /path/to/your-repo
 `docket: uninstalled. Commit the removal if you had committed the install.`.) Removing the block disarms Docket's pre-commit check for every
 checkout that uses that hook file, which is why this step is yours and not the
 script's. The same refusal applies to a linked worktree; once the other worktrees
-are gone the main checkout can uninstall normally.
+are gone the main checkout can uninstall normally, **unless** the hook's block was
+written from one of them (`--shared-hook` run in that worktree): its manifest
+disappears with the worktree, so the main checkout has a Docket block in its hook
+that it did not record. The same is true if you copied the block in by hand. The
+uninstall refuses, rather than removing `checks/` and leaving a hook that calls
+them. Real output after `git worktree remove` (first four lines; the manual steps
+that follow are as above):
+
+```text
+docket: REFUSING to uninstall -- nothing was changed.
+docket:   There is a Docket hook to deal with, and it may be shared, is not the one recorded, or was not recorded by this checkout.
+docket:   - the hook Git resolves carries a Docket block that this checkout's manifest did not record writing
+docket:   The hook Git resolves for this repository is: /path/to/your-repo/.git/hooks/pre-commit
+```
+
 
 One more limit: the manifest belongs to this clone. A fresh clone of your
 repository has the committed files but no manifest, so run the uninstaller in the
