@@ -564,7 +564,7 @@ def _source_copy(tmp_path: Path) -> Path:
     return src
 
 
-def _run_installer(installer: Path, target: Path):
+def _run_installer(installer: Path, target: Path, *flags: str):
     # `sh`, matching the script's own shebang, and POSIX-style paths.
     # Measured on Windows: the bare bash.EXE shipped with Git resolves a
     # drive-letter path against its own root and reports "No such file or
@@ -572,7 +572,7 @@ def _run_installer(installer: Path, target: Path):
     # reads the same path fine. Both exist on CI, so the shebang decides.
     shell = _shutil.which("sh") or _shutil.which("bash") or "sh"
     return subprocess.run(
-        [shell, Path(installer).as_posix(), Path(target).as_posix()],
+        [shell, Path(installer).as_posix(), *flags, Path(target).as_posix()],
         capture_output=True, text=True, encoding="utf-8")
 
 
@@ -965,29 +965,6 @@ def test_uninstall_leaves_changed_files_and_says_so(tmp_path):
 
 
 @installer_test
-def test_uninstall_removes_only_the_docket_block_from_the_hook_in_hookspath(tmp_path):
-    """With core.hooksPath set, the block comes out of the hook the installer
-    actually wrote, and the user's own hook lines stay.
-
-    Protects: commits after uninstall. Without it, a hard-coded .git/hooks path
-    reads a file that is not there, the hook keeps calling checks that were
-    just deleted, and every later commit fails."""
-    target = _adopter_with_user_files(tmp_path)
-    _g(target, "config", "core.hooksPath", ".githooks")
-    (target / ".githooks").mkdir()
-    mine = "#!/bin/sh\necho my own pre-commit step\n"
-    hook = target / ".githooks/pre-commit"
-    with hook.open("w", encoding="utf-8", newline="\n") as fh:
-        fh.write(mine)
-    assert _run_installer(INSTALLER, target).returncode == 0
-    assert "docket-checks" in hook.read_text(encoding="utf-8")
-    assert not (target / ".git/hooks/pre-commit").exists()
-    r = _run_installer(UNINSTALLER, target)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert hook.read_text(encoding="utf-8") == mine
-
-
-@installer_test
 def test_uninstall_deletes_a_hook_that_only_docket_wrote(tmp_path):
     """If nothing but Docket's block (and the shebang) remains, the hook goes.
 
@@ -998,30 +975,6 @@ def test_uninstall_deletes_a_hook_that_only_docket_wrote(tmp_path):
     assert _hook_path(target).is_file()
     assert _run_installer(UNINSTALLER, target).returncode == 0
     assert not _hook_path(target).exists()
-
-
-@installer_test
-def test_uninstall_in_a_linked_worktree_and_commit_afterwards(tmp_path):
-    """In a linked worktree `.git` is a file and hooks live in the common
-    directory. Uninstall must find both, and a commit afterwards must succeed.
-
-    Protects: worktree users, and the point of the uninstall. Without it, a
-    path built from `.git/hooks` fails in a worktree, and a leftover hook that
-    calls deleted checks turns every later commit into a failure; the commit is
-    the only end-to-end proof that the repository is usable again."""
-    main = _adopter_with_user_files(tmp_path)
-    wt = tmp_path / "wt"
-    _g(main, "worktree", "add", "-q", "-b", "feature", str(wt))
-    assert _run_installer(INSTALLER, wt).returncode == 0
-    hook = _hook_path(wt)
-    assert "docket-checks" in hook.read_text(encoding="utf-8")
-    r = _run_installer(UNINSTALLER, wt)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert not hook.exists()
-    (wt / "notes.txt").write_text("after uninstall\n", encoding="utf-8")
-    _g(wt, "add", "notes.txt")
-    committed = _g(wt, "commit", "-qm", "after uninstall", check=False)
-    assert committed.returncode == 0, committed.stdout + committed.stderr
 
 
 @installer_test
@@ -1173,13 +1126,12 @@ def test_uninstall_from_a_subdirectory_uses_the_top_level(tmp_path):
 
 @installer_test
 def test_uninstall_ignores_tampered_manifest_entries(tmp_path):
-    """Manifest entries that point outside the repository, or at a hook that is
-    not this repository's, are ignored and kept in the manifest.
+    """Manifest file and directory entries that point outside the repository are
+    ignored and kept in the manifest.
 
     Protects: files outside the working tree. Without it, a hand-edited or
     mis-merged manifest line such as `file <hash> ../x` deletes a file one
-    directory above the repository, and a `hook` line rewrites and deletes any
-    file that happens to contain the two marker lines. The manifest is also
+    directory above the repository, and `dir ..` reaches for the parent. The manifest is also
     not deleted while an entry is unprocessed."""
     target = _adopter_with_user_files(tmp_path)
     assert _run_installer(INSTALLER, target).returncode == 0
@@ -1187,29 +1139,21 @@ def test_uninstall_ignores_tampered_manifest_entries(tmp_path):
     with outside.open("w", encoding="utf-8", newline="\n") as fh:
         fh.write("not yours to delete\n")
     outside_hash = _g(target, "hash-object", "--no-filters", str(outside)).stdout.strip()
-    fake_hook = tmp_path / "other-hook"
-    block = ("#!/bin/sh\necho mine\n"
-             "# --- docket-checks (installed by Docket templates/install.sh) ---\n"
-             "echo hi\n# --- end docket-checks ---\n")
-    with fake_hook.open("w", encoding="utf-8", newline="\n") as fh:
-        fh.write(block)
     manifest = _manifest_path(target)
     with manifest.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(f"file\t{outside_hash}\t../outside.txt\n")
         fh.write(f"file\t{outside_hash}\t{outside.as_posix()}\n")
         fh.write("dir\t..\n")
-        fh.write(f"hook\t{fake_hook.as_posix()}\n")
     r = _run_installer(UNINSTALLER, target)
     assert r.returncode == 0, r.stdout + r.stderr
     assert outside.read_text(encoding="utf-8") == "not yours to delete\n"
-    assert fake_hook.read_text(encoding="utf-8") == block
     assert tmp_path.is_dir() and target.is_dir()
     assert "ignored" in r.stdout, r.stdout
     for rel in DOCKET_FILES:  # the genuine entries were still honoured
         assert not (target / rel).exists(), f"{rel} still present"
     assert manifest.is_file(), "manifest deleted with entries unprocessed"
     left = manifest.read_text(encoding="utf-8")
-    assert "../outside.txt" in left and "other-hook" in left
+    assert "../outside.txt" in left
 
 
 @installer_test
@@ -1376,6 +1320,261 @@ def test_a_failure_part_way_leaves_a_manifest_that_undoes_it(tmp_path):
     assert u.returncode == 0, u.stdout + u.stderr
     assert _files_outside_git(target) == before
     assert not manifest.exists()
+
+
+# ------------------------------------------- shared hooks: refuse, don't guess
+
+START_MARK = "# --- docket-checks (installed by"
+END_MARK = "# --- end docket-checks"
+
+
+def _shared_hook_repos(tmp_path: Path, names=("alpha", "beta")):
+    """Repositories that all use ONE core.hooksPath directory."""
+    shared = tmp_path / "shared-hooks"
+    shared.mkdir()
+    repos = []
+    for name in names:
+        repo = _init_repo(tmp_path / name)
+        _commit(repo, "initial", {"README.md": f"{name}\n"})
+        _g(repo, "config", "core.hooksPath", shared.as_posix())
+        repos.append(repo)
+    return shared / "pre-commit", repos
+
+
+def _snapshot(*paths: Path):
+    return {p.as_posix(): (p.read_bytes() if p.is_file() else None) for p in paths}
+
+
+def _strip_block(path: Path):
+    """What a user does by hand: delete Docket's lines from a hook file."""
+    keep, skip = [], False
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        if line.startswith(START_MARK):
+            skip = True
+        if not skip:
+            keep.append(line)
+        if line.startswith(END_MARK):
+            skip = False
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write("".join(keep))
+
+
+def _add_row(repo: Path):
+    with (repo / "DOCKET.md").open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("| UB-104 | OPEN | my row | symptom | - | - | filed |\n")
+
+
+@installer_test
+def test_shared_hooks_path_alpha_uninstalls_first_and_is_refused(tmp_path):
+    """Two repositories share one hooks directory; the one that wrote the block
+    cannot pull it out from under the other.
+
+    Protects: the second repository's commits and its pre-commit check. Without
+    it, the first uninstall deletes the shared hook, and the other repository,
+    still fully installed, silently loses its check (the old behaviour), or the
+    reverse order leaves a hook calling scripts that are gone. Each repository
+    ends with a successful commit and no hook pointing at missing scripts."""
+    hook, (alpha, beta) = _shared_hook_repos(tmp_path)
+    assert _run_installer(INSTALLER, alpha, "--shared-hook").returncode == 0
+    assert _run_installer(INSTALLER, beta).returncode == 0
+    assert START_MARK in hook.read_text(encoding="utf-8")
+    before_tree, before_hook = _tree(alpha), _snapshot(hook)
+    r = _run_installer(UNINSTALLER, alpha)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "nothing was changed" in r.stdout.lower() and "--skip-hook" in r.stdout, r.stdout
+    assert str(hook.as_posix()).split("/")[-1] in r.stdout
+    assert _tree(alpha) == before_tree and _snapshot(hook) == before_hook
+    blocked = _run_installer(UNINSTALLER, alpha, "--skip-hook")
+    assert blocked.returncode == 2, blocked.stdout + blocked.stderr  # block still there
+    assert _snapshot(hook) == before_hook
+    _commit(alpha, "alpha commit", {"a.txt": "a\n"})
+    _commit(beta, "beta commit", {"b.txt": "b\n"})
+    _strip_block(hook)                      # the user's deliberate, manual step
+    done = _run_installer(UNINSTALLER, alpha, "--skip-hook")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not (alpha / "checks/check_duplicate_ids.py").exists()
+    _commit(alpha, "alpha after uninstall", {"a2.txt": "a\n"})
+    _commit(beta, "beta after", {"b2.txt": "b\n"})   # hook has no Docket block now
+
+
+@installer_test
+def test_shared_hooks_path_non_writer_uninstall_is_refused(tmp_path):
+    """The repository that did NOT write the shared block is refused too.
+
+    Its uninstall used to remove checks/ and say nothing about the hook, after
+    which every commit there failed with a missing script.
+
+    Protects: that repository's ability to commit. Without it, the shared hook
+    keeps calling checks/check_duplicate_ids.py in a repository that no longer
+    has it, and `git commit` fails (this test ends in a commit that must pass)."""
+    hook, (alpha, beta) = _shared_hook_repos(tmp_path)
+    assert _run_installer(INSTALLER, alpha, "--shared-hook").returncode == 0
+    r = _run_installer(INSTALLER, beta)
+    assert r.returncode == 0 and "already installed" in r.stdout, r.stdout
+    _add_row(beta)
+    before = (_tree(beta), _snapshot(hook))
+    u = _run_installer(UNINSTALLER, beta)
+    assert u.returncode == 2, u.stdout + u.stderr
+    assert (_tree(beta), _snapshot(hook)) == before
+    _commit(beta, "beta after refusal", {"b.txt": "b\n"})
+    _commit(alpha, "alpha after", {"a.txt": "a\n"})
+
+
+@installer_test
+def test_changing_hooks_path_after_install_does_not_delete_a_shared_hook(tmp_path):
+    """A repository that installed with default hooks and later pointed
+    core.hooksPath at a directory another repository uses must not have that
+    other repository's hook cut or deleted.
+
+    Protects: the other repository's hook file (byte-for-byte) and this one's
+    own block. Without it, the uninstaller acts on whatever hook Git resolves
+    now, deletes the shared hook, and leaves its own block behind."""
+    hook, (alpha, _beta) = _shared_hook_repos(tmp_path, names=("alpha", "beta"))
+    gamma = _init_repo(tmp_path / "gamma")
+    _commit(gamma, "initial", {"README.md": "gamma\n"})
+    assert _run_installer(INSTALLER, alpha, "--shared-hook").returncode == 0
+    assert _run_installer(INSTALLER, gamma).returncode == 0   # default hooks
+    own = _hook_path(gamma)
+    assert START_MARK in own.read_text(encoding="utf-8")
+    _g(gamma, "config", "core.hooksPath", hook.parent.as_posix())
+    before = (_snapshot(hook, own), _tree(gamma))
+    r = _run_installer(UNINSTALLER, gamma)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert (_snapshot(hook, own), _tree(gamma)) == before
+    _commit(gamma, "gamma after refusal", {"g.txt": "g\n"})
+    _commit(alpha, "alpha after", {"a.txt": "a\n"})
+
+
+@installer_test
+def test_linked_worktree_uninstall_is_refused_then_allowed_when_alone(tmp_path):
+    """Linked worktrees share one hooks directory, so a worktree's uninstall is
+    refused; once the worktree is gone the main checkout can uninstall.
+
+    Protects: commits in every worktree. Without it, uninstalling in the
+    worktree leaves a shared hook that calls scripts that are gone (the commit
+    in it fails), or removes the hook the main checkout still relies on."""
+    main = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, main).returncode == 0
+    wt = tmp_path / "wt"
+    _g(main, "worktree", "add", "-q", "-b", "feature", str(wt))
+    i = _run_installer(INSTALLER, wt)
+    assert i.returncode == 0 and "already installed" in i.stdout, i.stdout
+    _add_row(wt)
+    hook = _hook_path(main)
+    before = (_tree(wt), _snapshot(hook))
+    r = _run_installer(UNINSTALLER, wt)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert (_tree(wt), _snapshot(hook)) == before
+    _commit(wt, "worktree commit", {"w.txt": "w\n"})
+    _commit(main, "main commit", {"m.txt": "m\n"})
+    _g(main, "worktree", "remove", "--force", str(wt))
+    done = _run_installer(UNINSTALLER, main)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not hook.exists()
+    _commit(main, "main after uninstall", {"m2.txt": "m\n"})
+
+
+@installer_test
+def test_installer_does_not_write_a_shared_hook_unless_asked(tmp_path):
+    """With core.hooksPath set, or linked worktrees present, the files are
+    installed but the hook is not written without --shared-hook.
+
+    Protects: hooks that other repositories rely on. Without it, the installer
+    appends Docket's block to a hook shared with repositories that have no
+    checks/, and every commit there fails."""
+    hook, (alpha, _beta) = _shared_hook_repos(tmp_path)
+    r = _run_installer(INSTALLER, alpha)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NOT written" in r.stdout and "--shared-hook" in r.stdout, r.stdout
+    assert not hook.exists()
+    assert (alpha / "checks/check_duplicate_ids.py").is_file()
+    assert "hook\t" not in _manifest_path(alpha).read_text(encoding="utf-8")
+    main = _adopter_with_user_files(tmp_path)
+    wt = tmp_path / "wt"
+    _g(main, "worktree", "add", "-q", "-b", "feature", str(wt))
+    w = _run_installer(INSTALLER, main)
+    assert w.returncode == 0 and "NOT written" in w.stdout, w.stdout
+    assert not _hook_path(main).exists()
+    again = _run_installer(INSTALLER, main, "--shared-hook")
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert START_MARK in _hook_path(main).read_text(encoding="utf-8")
+
+
+@installer_test
+def test_uninstall_refuses_a_hook_entry_that_is_not_the_resolved_hook(tmp_path):
+    """A manifest hook entry that does not resolve to the hook Git resolves now
+    makes the whole uninstall refuse and change nothing.
+
+    Protects: files outside this repository's own hook. Without it, a tampered
+    or stale entry is acted on or silently dropped, and a hook is cut or left
+    calling checks that were removed."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    fake = tmp_path / "other-hook"
+    block = (f"#!/bin/sh\necho mine\n{START_MARK} Docket templates/install.sh) ---\n"
+             f"echo hi\n{END_MARK} ---\n")
+    with fake.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(block)
+    with _manifest_path(target).open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write(f"hook\t{fake.as_posix()}\n")
+    before = (_tree(target), _snapshot(fake))
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert (_tree(target), _snapshot(fake)) == before
+
+
+@installer_test
+def test_hook_cut_keeps_crlf_user_lines_byte_for_byte(tmp_path):
+    """CRLF lines in the user's hook survive install and uninstall unchanged.
+
+    Protects: the user's bytes. Without BINMODE on the awk that rewrites the
+    file, Git for Windows' awk strips every CR, so a hook kept in CRLF is
+    silently converted (compare with cmp, not by reading lines)."""
+    target = _adopter_with_user_files(tmp_path)
+    hook = _hook_path(target)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    mine = b"#!/bin/sh\r\necho before\r\n# tail\r\n"
+    hook.write_bytes(mine)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    assert START_MARK in hook.read_text(encoding="utf-8")
+    assert _run_installer(UNINSTALLER, target).returncode == 0
+    assert hook.read_bytes() == mine
+
+
+@installer_test
+def test_gitattributes_cut_keeps_crlf_user_lines_byte_for_byte(tmp_path):
+    """CRLF lines in the user's .gitattributes survive install and uninstall.
+
+    Protects: a .gitattributes stored with CRLF in the repository, whose
+    removal commit would otherwise show every line modified."""
+    target = _init_repo(tmp_path / "adopter")
+    mine = b"*.png binary\r\n*.gif binary\r\n"
+    _commit(target, "initial", {"README.md": "x\n"})
+    (target / ".gitattributes").write_bytes(mine)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    assert _run_installer(UNINSTALLER, target).returncode == 0
+    assert (target / ".gitattributes").read_bytes() == mine
+
+
+@installer_test
+def test_hook_cut_stops_after_the_one_block_it_wrote(tmp_path):
+    """Exactly Docket's block is cut; a later pair of look-alike marker lines
+    and the user's lines between them stay.
+
+    Protects: user hook lines written between copies of Docket's marker prefix.
+    Without it, the hook cutter re-arms on every later start marker and deletes
+    them while saying the other hook lines were kept."""
+    target = _adopter_with_user_files(tmp_path)
+    assert _run_installer(INSTALLER, target).returncode == 0
+    hook = _hook_path(target)
+    user = (f"{START_MARK} me, a line that copies the marker) -------\n"
+            'echo "my own precious hook line"\n'
+            f"{END_MARK} (mine) -----\necho \"after my block\"\n")
+    with hook.open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write(user)
+    r = _run_installer(UNINSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert hook.read_text(encoding="utf-8") == "#!/bin/sh\n" + user
 
 
 # ------------------------------------------- state transitions over a range

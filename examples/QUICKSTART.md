@@ -50,15 +50,30 @@ goes, or a file where a directory goes). If any fails, nothing has been written.
 remaining steps check your ledger; a failure there reports on the ledger and
 does not undo the install (use the uninstaller below for that).
 
+**Shared hooks.** If `core.hooksPath` is set (in any scope) or the repository has
+linked worktrees, the pre-commit hook may be shared with other checkouts, whose
+commits would run Docket's block against files they may not have. The installer
+then installs the files and does **not** write the hook, unless you pass
+`--shared-hook`:
+
+```text
+docket: NOTICE -- pre-commit hook NOT written: the hook may be shared with other checkouts.
+docket:   - core.hooksPath is set (/path/to/shared-hooks)
+docket:   Docket's files are installed; its pre-commit check is not. To write the hook into
+docket:   /path/to/shared-hooks/pre-commit anyway, re-run with --shared-hook. Removing it later is a manual step.
+```
+
+(exit 0). Re-run with `sh Docket/templates/install.sh --shared-hook /path/to/your-repo`
+to write the block anyway; removing it later is a manual step (see Uninstall).
+
 Read [`templates/install.sh`](../templates/install.sh) before you run it. It
 writes only inside the target repository: `checks/`, `tests/`,
 `.github/workflows/ledger-ci.yml`, `DOCKET.md` (only if absent), a stanza
 appended to `.gitattributes`, and a block appended to the repository's
 `pre-commit` hook. It also writes an install manifest (see Uninstall) inside the
-git directory. If you have set `core.hooksPath`, the hook goes to that
-directory (the installer asks Git where hooks live), which may be shared by
-other repositories; check `git config core.hooksPath` first. It refuses to
-overwrite a differing file.
+git directory. The hook is written only when it is this checkout's own; with
+`core.hooksPath` set or linked worktrees present it is not (see "Shared hooks"). It
+refuses to overwrite a differing file.
 
 POSIX shell, or Git Bash on Windows, from the directory that contains your
 Docket clone:
@@ -92,16 +107,16 @@ docket: running the fixture suite that arms these checks. It builds a
 docket:   scratch git repo per case: a few seconds on Linux/macOS, and
 docket:   noticeably longer on Windows, where git subprocesses are far
 docket:   more expensive. Be patient; it is not hung.
-..............................sssssssssssssssssssssssssssssss........... [ 92%]
-......                                                                   [100%]
-47 passed, 31 skipped in 37.13s
+..............................ssssssssssssssssssssssssssssssssssssss.... [ 84%]
+.............                                                            [100%]
+47 passed, 38 skipped in 57.29s
 docket: OK -- checks ran clean and the fixture suite passed.
 ```
 
 Into a repository whose current branch has **no commits yet**, the same install
 prints the notice below in place of the closure line and ends
 `docket: OK -- checks ran clean (closure check skipped: no commits yet) and the fixture suite passed.`
-(exit 0, `47 passed, 31 skipped`):
+(exit 0, `47 passed, 38 skipped`):
 
 ```text
 docket: NOTICE -- closure check SKIPPED: the current branch has no commits yet.
@@ -111,7 +126,7 @@ docket:          It runs in CI, and here once there is history to check.
 In a shallow clone (`git clone --depth 1`) the notice reads `this is a shallow
 clone, where commit reachability cannot be decided` instead.
 
-**The 31 skipped tests** are the tests of the installer and uninstaller
+**The 38 skipped tests** are the tests of the installer and uninstaller
 themselves. They need `templates/`, which is not copied into your project, so
 the installed suite skips them with a stated reason instead of failing. They run
 in the Docket clone's own suite.
@@ -119,9 +134,9 @@ in the Docket clone's own suite.
 **Windows cost.** The suite builds a scratch Git repository per case, and Git
 subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
 install took between 26 s and 58 s on repeated runs into a one-commit or empty repository. Docket's own
-78-test suite, which also runs the installer and uninstaller many times, took
-25 minutes in one run on a machine shared with other work (an earlier 66-test
-version took 7 minutes on an idle one); on Linux it takes seconds. Expect it to vary
+85-test suite, which also runs the installer and uninstaller many times, took
+19 minutes in one run on a machine shared with other work (earlier, smaller
+versions took between 7 and 25 minutes); on Linux it takes seconds. Expect it to vary
 with antivirus and disk, and do not interrupt it. If pytest is not installed
 the installer says so and reports the suite as pending rather than passed.
 
@@ -175,12 +190,14 @@ What it does, and does not do:
   `left in place (changed since install)` message.
 - Never deletes a directory wholesale. Your own files in `checks/` and `tests/`
   stay; a directory the installer created is removed only once it is empty.
-- Removes only Docket's marked block from the pre-commit hook, and only if both of
-  its marker lines are still there. It asks Git where this repository's hook is
-  now, so a repository that has been renamed or moved since the install is still
-  found, and `core.hooksPath` and linked worktrees are handled. It deletes the
-  hook only if nothing but a shebang is left. A different file named in the
-  manifest that merely looks like Docket's block is left alone and reported.
+- Removes Docket's marked block from the pre-commit hook only when that hook is
+  this checkout's own, and only if both marker lines are still there; it deletes
+  the hook only if nothing but a shebang is left. When `core.hooksPath` is set,
+  the repository has linked worktrees, or the hook recorded at install time is not
+  the one Git resolves now, the **whole uninstall is refused** (exit 2, nothing
+  changed) and the manual steps are printed, because removing this checkout's files
+  would break the commits of every checkout that shares the hook, and removing the
+  block would disarm their check. See "Shared hooks" below.
 - Removes Docket's stanza from `.gitattributes` only if it is still exactly what
   was installed (opening line, closing line and text, checked against a hash taken
   at install time). If you have deleted the closing line or edited the stanza, the
@@ -234,9 +251,40 @@ docket: uninstalled, except what is listed above. Those entries stay in the
 docket: manifest; re-run this script after you have dealt with them.
 ```
 
-Two limits. The hook lives in the repository's shared hooks directory, so
-uninstalling from one linked worktree removes the hook for all of them; the
-installed files are per worktree. And the manifest belongs to this clone: a
-fresh clone of your repository has the committed files but no manifest, so run
-the uninstaller in the clone where you ran the installer, or delete the files
-by hand.
+### Shared hooks
+
+Real output when the repository uses a shared `core.hooksPath` hook that carries
+Docket's block (exit 2; no file, hook or manifest was touched):
+
+```text
+docket: REFUSING to uninstall -- nothing was changed.
+docket:   There is a Docket hook to deal with, and it may be shared or is not the one recorded.
+docket:   - core.hooksPath is set (/path/to/shared-hooks)
+docket:   The hook Git resolves for this repository is: /path/to/shared-hooks/pre-commit
+docket:   Docket's block there calls checks/ in whichever checkout commits, so removing this
+docket:   checkout's files first would break commits, and removing the block disarms Docket's
+docket:   pre-commit check for every checkout that uses that hook file. If you accept that:
+docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'
+docket:        through '# --- end docket-checks';
+docket:     2. re-run: sh uninstall.sh --skip-hook /path/to/your-repo
+docket:   Otherwise leave Docket installed here.
+```
+
+After you have deleted the block from that hook file by hand, `--skip-hook`
+continues with the safe parts (files, stanza, empty directories). It is allowed
+only when no Docket block remains in the hook; if one does, it refuses the same
+way:
+
+```sh
+sh Docket/templates/uninstall.sh --skip-hook /path/to/your-repo
+```
+
+(exit 0; the hook file, which is yours, is left as you edited it; the last line is
+`docket: uninstalled. Commit the removal if you had committed the install.`.) Removing the block disarms Docket's pre-commit check for every
+checkout that uses that hook file, which is why this step is yours and not the
+script's. The same refusal applies to a linked worktree; once the other worktrees
+are gone the main checkout can uninstall normally.
+
+One more limit: the manifest belongs to this clone. A fresh clone of your
+repository has the committed files but no manifest, so run the uninstaller in the
+clone where you ran the installer, or delete the files by hand.

@@ -1,32 +1,42 @@
 #!/bin/sh
 # Remove what templates/install.sh installed -- and only that.
 #
-# Usage: uninstall.sh /path/to/your-repo
+# Usage: uninstall.sh [--skip-hook] /path/to/your-repo
 #
 # Reads the install manifest the installer wrote inside the repository's git
 # directory (`git rev-parse --git-path docket-install.manifest`), and:
 #   * removes each listed file ONLY if its content still matches the hash
 #     recorded at install time; a file you have changed is left in place, with
 #     a message (this includes DOCKET.md once you have added rows to it);
-#   * removes Docket's marked block from the pre-commit hook Git resolves for
-#     this repository now (so a renamed or moved repository is still found) --
-#     only if both of its marker lines are still there -- and deletes that hook
-#     only if nothing but a shebang remains;
+#   * removes Docket's marked block from the pre-commit hook -- but only when
+#     that hook is this checkout's own: if core.hooksPath is set, the repository
+#     has linked worktrees, or the recorded hook is not the one Git resolves
+#     now, the whole uninstall is REFUSED (exit 2, nothing changed) with the
+#     manual steps; delete the block by hand, then re-run with --skip-hook, which
+#     is allowed only once no Docket block remains in the hook;
 #   * removes Docket's stanza from .gitattributes only if it is still exactly
 #     what was installed (opening line, closing line and text, by hash); if it
 #     is not, the file is left untouched and you are told what to remove;
 #   * removes Python bytecode of Docket's own scripts, and then any directory
 #     the installer created, but only if it is now empty.
 # It never deletes a directory wholesale and never touches a file that is not
-# in the manifest. A manifest entry it cannot safely act on (a path that is
-# absolute, climbs out of the repository, or a hook that is not this
-# repository's) is ignored with a message and stays in the manifest, and the
-# manifest is deleted only when every entry has been dealt with. If you give a
-# subdirectory of the repository it uses the repository's top level and says
-# so. Running it twice is harmless.
+# in the manifest. A manifest file or directory entry it cannot safely act on
+# (absolute, or climbing out of the repository) is ignored with a message and
+# stays in the manifest, and the manifest is deleted only when every entry has
+# been dealt with. If you give a subdirectory of the repository it uses the
+# repository's top level and says so. Running it twice is harmless.
 set -eu
 
-TARGET="${1:?usage: uninstall.sh /path/to/your-repo}"
+SKIP_HOOK=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skip-hook) SKIP_HOOK=1; shift ;;
+    --) shift; break ;;
+    -*) echo "docket: ERROR: unknown option $1 (usage: uninstall.sh [--skip-hook] /path/to/your-repo)" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+TARGET="${1:?usage: uninstall.sh [--skip-hook] /path/to/your-repo}"
 if ! git -C "$TARGET" rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "docket: ERROR: $TARGET is not a git worktree" >&2
   exit 2
@@ -61,6 +71,76 @@ HOOKS="$WORK/hooks"
 ATTR="$WORK/attr"
 printf '# docket install manifest v1\n' > "$KEEP"
 : > "$DIRS"; : > "$HOOKS"; : > "$ATTR"
+
+# --- shared hooks: refuse rather than guess ----------------------------------
+# A hook is shared when core.hooksPath is set (any scope) or the repository has
+# linked worktrees: one hook file then serves several checkouts, and Docket's
+# block calls checks/ in whichever one commits. Removing this checkout's files
+# would break the others' commits; cutting the block disarms their check. So
+# when there is a hook to deal with and it may be shared, or the recorded hook
+# is not the one Git resolves now, NOTHING is changed (exit 2) and the manual
+# steps are printed. --skip-hook continues once no Docket block is left in it.
+# (shared_hook_reason is the same function as in install.sh; keep them in step.)
+shared_hook_reason() {
+  _hp="$(git -C "$TARGET" config --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$_hp" ]; then echo "core.hooksPath is set ($_hp)"; fi
+  _wt="$(git -C "$TARGET" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+  if [ "${_wt:-1}" -gt 1 ]; then echo "the repository has linked worktrees ($_wt checkouts share one hooks directory)"; fi
+}
+has_block() {
+  [ -f "$1" ] || return 1
+  if grep -q '^# --- docket-checks (installed by' "$1"; then return 0; fi
+  grep -q '^# --- end docket-checks' "$1"
+}
+hook_abs() {
+  case "$1" in
+    /*|[A-Za-z]:*) echo "$1" ;;
+    *) echo "$TARGET/$1" ;;
+  esac
+}
+refuse() {   # refuse <headline>; prints the manual steps and exits 2
+  echo "docket: REFUSING to uninstall -- nothing was changed."
+  echo "docket:   $1"
+  if [ -n "$REASONS" ]; then
+    echo "$REASONS" | while IFS= read -r _r; do
+      if [ -n "$_r" ]; then echo "docket:   - $_r"; fi
+    done
+  fi
+  echo "docket:   The hook Git resolves for this repository is: $EXPECTED_HOOK"
+  echo "docket:   Docket's block there calls checks/ in whichever checkout commits, so removing this"
+  echo "docket:   checkout's files first would break commits, and removing the block disarms Docket's"
+  echo "docket:   pre-commit check for every checkout that uses that hook file. If you accept that:"
+  echo "docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'"
+  echo "docket:        through '# --- end docket-checks';"
+  echo "docket:     2. re-run: sh uninstall.sh --skip-hook $TARGET"
+  echo "docket:   Otherwise leave Docket installed here."
+  exit 2
+}
+HOOK_RECORDED="$(awk -F "$TAB" '$1 == "hook" { print $2 }' "$MANIFEST")"
+REASONS="$(shared_hook_reason)"
+RECORDED_BLOCKS=""
+while IFS= read -r _rec; do
+  [ -n "$_rec" ] || continue
+  _abs="$(hook_abs "$_rec")"
+  if [ "$_abs" != "$EXPECTED_HOOK" ]; then
+    REASONS="$REASONS
+the manifest recorded the hook $_abs, but Git resolves $EXPECTED_HOOK now"
+    if has_block "$_abs"; then RECORDED_BLOCKS="$RECORDED_BLOCKS $_abs"; fi
+  fi
+done <<EOF
+$HOOK_RECORDED
+EOF
+NEEDS_HOOK=0
+if [ -n "$HOOK_RECORDED" ] || has_block "$EXPECTED_HOOK"; then NEEDS_HOOK=1; fi
+HOOK_MODE=normal
+if [ "$SKIP_HOOK" = 1 ]; then
+  if has_block "$EXPECTED_HOOK" || [ -n "$RECORDED_BLOCKS" ]; then
+    refuse "--skip-hook is only allowed once no Docket block remains in the hook, and one does (${RECORDED_BLOCKS:-$EXPECTED_HOOK})."
+  fi
+  HOOK_MODE=skip
+elif [ "$NEEDS_HOOK" = 1 ] && [ -n "$(echo "$REASONS" | tr -d '[:space:]')" ]; then
+  refuse "There is a Docket hook to deal with, and it may be shared or is not the one recorded."
+fi
 
 # A manifest path is usable only if it is relative, has no ".." component, and
 # its parent directory really lives inside the top level (symlinks resolved).
@@ -130,9 +210,13 @@ remove_hook_block() {   # remove_hook_block <hook file>; returns 1 if left as is
   if grep -q '^# --- docket-checks (installed by' "$hook"; then has_start=1; fi
   if grep -q '^# --- end docket-checks' "$hook"; then has_end=1; fi
   if [ "$has_start" = 1 ] && [ "$has_end" = 1 ]; then
-    awk '/^# --- docket-checks \(installed by/ { skip = 1 }
+    # Exactly one block, then stop (a later look-alike marker starts nothing).
+    # BINMODE=3 keeps the user's CR bytes on Git for Windows' awk; any other awk
+    # treats it as an ordinary variable.
+    awk -v BINMODE=3 \
+        '!done && !skip && /^# --- docket-checks \(installed by/ { skip = 1 }
          !skip { print }
-         /^# --- end docket-checks/ { skip = 0 }' "$hook" > "$WORK/hook.new"
+         skip && /^# --- end docket-checks/ { skip = 0; done = 1 }' "$hook" > "$WORK/hook.new"
     cat "$WORK/hook.new" > "$hook"
     if awk 'NF && !/^#!/ { n++ } END { exit (n > 0) }' "$hook"; then
       rm -f "$hook"
@@ -149,22 +233,10 @@ remove_hook_block() {   # remove_hook_block <hook file>; returns 1 if left as is
   fi
 }
 
-if [ -s "$HOOKS" ]; then
+if [ "$HOOK_MODE" = normal ] && [ -s "$HOOKS" ]; then
   if ! remove_hook_block "$EXPECTED_HOOK"; then
     printf 'hook\t%s\n' "$HOOK_SPELLING" >> "$KEEP"
   fi
-  # A recorded path that is a different file from today's hook, yet still holds
-  # Docket-looking lines, is not touched; it is named only if it exists.
-  while IFS= read -r rec; do
-    [ -n "$rec" ] || continue
-    case "$rec" in /*|[A-Za-z]:*) rec_abs="$rec" ;; *) rec_abs="$TARGET/$rec" ;; esac
-    if [ "$rec_abs" != "$EXPECTED_HOOK" ] && [ -f "$rec_abs" ] &&
-       grep -q '^# --- docket-checks (installed by' "$rec_abs"; then
-      echo "docket: ignored manifest entry: $rec_abs is not this repository's hook ($EXPECTED_HOOK)"
-      echo "docket:   it holds lines that look like Docket's block; left as is. Remove them by hand if they are yours."
-      printf 'hook\t%s\n' "$rec" >> "$KEEP"
-    fi
-  done < "$HOOKS"
 fi
 
 # --- .gitattributes: take out Docket's stanza, and only that ----------------
@@ -188,7 +260,8 @@ while IFS="$TAB" read -r how want || [ -n "$how" ]; do
      [ "$(tr -d '\r' < "$WORK/stanza" | git hash-object --stdin)" = "$want" ]; then
     # Exactly one block -- the one whose hash was just verified -- and then stop:
     # a later line that merely looks like the opening line starts nothing.
-    awk '!done && !skip && /^# --- Docket ledger:/ { skip = 1 }
+    awk -v BINMODE=3 \
+        '!done && !skip && /^# --- Docket ledger:/ { skip = 1 }
          !skip { print }
          skip && /^# -+[ \t\r]*$/ { skip = 0; done = 1 }' "$attrs" > "$WORK/attrs.new"
     cat "$WORK/attrs.new" > "$attrs"

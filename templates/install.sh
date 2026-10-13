@@ -1,7 +1,11 @@
 #!/bin/sh
 # Install Docket into a target repository, and prove the install by running it.
 #
-# Usage: install.sh /path/to/your-repo
+# Usage: install.sh [--shared-hook] /path/to/your-repo
+#
+# The pre-commit hook is written only when it is this checkout's own. If
+# core.hooksPath is set or the repository has linked worktrees the hook may be
+# shared, so it is NOT written unless you pass --shared-hook.
 #
 # Places: checks/ (all six checks) + tests/ (the fixture suite that arms them)
 #         + the pre-commit hook + .github/workflows/ledger-ci.yml
@@ -36,7 +40,16 @@
 set -eu
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
-TARGET="${1:?usage: install.sh /path/to/your-repo}"
+SHARED_OK=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --shared-hook) SHARED_OK=1; shift ;;
+    --) shift; break ;;
+    -*) echo "docket: ERROR: unknown option $1 (usage: install.sh [--shared-hook] /path/to/your-repo)" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+TARGET="${1:?usage: install.sh [--shared-hook] /path/to/your-repo}"
 
 if ! git -C "$TARGET" rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "docket: ERROR: $TARGET is not a git worktree" >&2
@@ -214,10 +227,26 @@ else
 fi
 
 # --- pre-commit hook --------------------------------------------------------
-mkdir -p "$HOOKS_DIR"
+# A hook is shared when core.hooksPath is set (any scope) or the repository has
+# linked worktrees: one hook file then serves several checkouts, and Docket's
+# block calls checks/ in whichever one commits. Writing it is not undoable from
+# here without breaking the others, so it is written only on request.
+shared_hook_reason() {
+  _hp="$(git -C "$TARGET" config --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$_hp" ]; then printf 'core.hooksPath is set (%s)\n' "$_hp"; fi
+  _wt="$(git -C "$TARGET" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+  if [ "${_wt:-1}" -gt 1 ]; then printf 'the repository has linked worktrees (%s checkouts share one hooks directory)\n' "$_wt"; fi
+}
+SHARED_REASON="$(shared_hook_reason)"
 if [ -f "$HOOK" ] && grep -q '^# --- docket-checks (installed by' "$HOOK" 2>/dev/null; then
   echo "docket: pre-commit hook already installed at $HOOK"
+elif [ -n "$SHARED_REASON" ] && [ "$SHARED_OK" != 1 ]; then
+  echo "docket: NOTICE -- pre-commit hook NOT written: the hook may be shared with other checkouts."
+  printf '%s\n' "$SHARED_REASON" | while IFS= read -r _r; do echo "docket:   - $_r"; done
+  echo "docket:   Docket's files are installed; its pre-commit check is not. To write the hook into"
+  echo "docket:   $HOOK anyway, re-run with --shared-hook. Removing it later is a manual step."
 else
+  mkdir -p "$HOOKS_DIR"
   if [ ! -f "$HOOK" ]; then printf '#!/bin/sh\n' > "$HOOK"; fi
   printf 'hook\t%s/pre-commit\n' "$HOOKS_GIT_SPELLING" >> "$NEW"
   if [ -s "$HOOK" ] && [ -n "$(tail -c 1 "$HOOK")" ]; then printf '\n' >> "$HOOK"; fi
