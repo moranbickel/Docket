@@ -29,18 +29,18 @@ Real output (the first command exits 1, the second exits 0):
 
 ## 1. Install into a project
 
-The target must be a Git repository **with at least one commit**. On a repository
-with no commits the installer writes its files and then stops at the closure
-check (`[closure-refs] ERROR: --head HEAD does not resolve`), exiting non-zero
-before the fixture suite runs. Make an initial commit first.
+The target must be a Git repository. It may be brand new: with no commits yet,
+the installer skips the one check that needs a commit to read (closure
+references), says so, and still finishes. Nothing is left half-installed.
 
 Read [`templates/install.sh`](../templates/install.sh) before you run it. It
 writes only inside the target repository: `checks/`, `tests/`,
 `.github/workflows/ledger-ci.yml`, `DOCKET.md` (only if absent), a stanza
 appended to `.gitattributes`, and a block appended to the repository's
-`pre-commit` hook. It refuses to overwrite a differing file. If you have set `core.hooksPath`, the hook
-goes to that directory (the installer asks Git where hooks live), which may be shared
-by other repositories; check `git config core.hooksPath` first.
+`pre-commit` hook. If you have set `core.hooksPath`, the hook goes to that
+directory (the installer asks Git where hooks live), which may be shared by
+other repositories; check `git config core.hooksPath` first. It refuses to
+overwrite a differing file.
 
 POSIX shell, or Git Bash on Windows, from the directory that contains your
 Docket clone:
@@ -57,7 +57,8 @@ Windows PowerShell:
 
 Use forward slashes in the target path, as shown.
 
-Real output (the installer's checks section):
+Real output, into a repository that already has one commit (paths shortened;
+the exit code is 0):
 
 ```text
 docket: starter ledger -> /path/to/your-repo/DOCKET.md
@@ -70,38 +71,36 @@ docket: verifying -- running the installed single-ledger checks against /path/to
 [pending-markers] PASS: 0 pending row(s)
 [closure-refs] PASS: 0 DONE row(s) each cite a commit reachable from HEAD
 docket: running the fixture suite that arms these checks. It builds a
-docket:   scratch git repo per case: ~4s on Linux/macOS, ~14min on
-docket:   Windows, where git subprocesses are far more expensive.
+docket:   scratch git repo per case: a few seconds on Linux/macOS, and
+docket:   about a minute on a Windows 11 machine, where git subprocesses
+docket:   are far more expensive. Be patient; it is not hung.
+..............................sssssssss.................                 [100%]
+47 passed, 9 skipped in 17.65s
+docket: OK -- checks ran clean and the fixture suite passed.
 ```
 
-### Known issue in the final step
+Into a repository with **no commits**, the same install prints the notice below
+in place of the closure line and ends
+`docket: OK -- checks ran clean (closure check skipped: no commits yet) and the fixture suite passed.`
+(exit 0):
 
-Two things to know about the suite step, both observed on the machine above:
+```text
+docket: NOTICE -- closure check SKIPPED: this repository has no commits yet,
+docket:          so there is no HEAD to resolve closure notes against.
+docket:          It runs in CI, and here once you have made a commit.
+```
 
-- **Time.** The whole install took 35 s on Windows here, and Docket's own suite
-  (52 tests) took 67 s, not the 14 minutes the message estimates. Expect it to
-  vary with antivirus and disk.
-- **Five failures in an adopter repository.** The installer copies `checks/` and
-  `tests/` but not `templates/`, and five of the installed tests are tests of the
-  installer itself, which need `templates/`. They fail with `No such file or
-  directory ... templates/install.sh`, so the installer exits 1 and never
-  prints its final `OK` line. The checks above it ran and passed. The other 47
-  tests pass:
+**The 9 skipped tests** are the tests of the installer itself. They need
+`templates/`, which is not copied into your project, so the installed suite
+skips them with a stated reason instead of failing. They run in the Docket
+clone's own suite.
 
-  ```text
-  python -m pytest tests/test_checks.py -q -k "not installer and not installed and not installing"
-  47 passed, 5 deselected in 47.98s
-  ```
-
-  The five are `test_installed_workflow_paths_all_resolve`,
-  `test_parity_control_fails_when_the_installer_drops_the_suite`,
-  `test_installer_refuses_to_clobber_a_differing_file`,
-  `test_installing_twice_does_not_duplicate_the_gitattributes_rule` and
-  `test_installer_leaves_an_existing_ledger_alone`. Run the full suite from your
-  Docket clone, where they pass, if you want those too.
-
-If pytest is not installed the installer says so and reports the suite as
-pending rather than passed.
+**Windows cost.** The suite builds a scratch Git repository per case, and Git
+subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
+install took 28 s into the one-commit repository and 57 s into the empty one;
+Docket's own 56-test suite took 120 s. Expect it to vary with antivirus and
+disk, and do not interrupt it. If pytest is not installed the installer says so
+and reports the suite as pending rather than passed.
 
 ## 2. First check in your project
 

@@ -32,7 +32,7 @@ sh Docket/templates/install.sh /path/to/your-repo
 ```
 
 Step by step, with captured output, the Windows (PowerShell) form, and how to remove it:
-[install, first check, uninstall](examples/QUICKSTART.md). The target repository needs at least one commit.
+[install, first check, uninstall](examples/QUICKSTART.md).
 
 The installer adds checks, test fixtures, a CI workflow, a pre-commit hook, a
 starter ledger, and Git attributes. Read the [installer](templates/install.sh)

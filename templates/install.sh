@@ -134,7 +134,18 @@ cd "$TARGET"
 "$PY" checks/check_duplicate_ids.py DOCKET.md
 "$PY" checks/check_merge_driver.py DOCKET.md
 "$PY" checks/check_pending_markers.py DOCKET.md
-"$PY" checks/check_closure_references.py DOCKET.md
+# The closure check reads HEAD, so a repository with no commits yet has nothing
+# to resolve a closure note against. It is verification only (the install is
+# complete either way), so say so and carry on -- never stop half-way through.
+if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  "$PY" checks/check_closure_references.py DOCKET.md
+  CLOSURE_NOTE=""
+else
+  echo "docket: NOTICE -- closure check SKIPPED: this repository has no commits yet,"
+  echo "docket:          so there is no HEAD to resolve closure notes against."
+  echo "docket:          It runs in CI, and here once you have made a commit."
+  CLOSURE_NOTE=" (closure check skipped: no commits yet)"
+fi
 
 # check_phantom_ids.py is NOT run here, on purpose. It reads TRACKED files
 # (git ls-files), and nothing this installer just wrote has been committed
@@ -146,21 +157,22 @@ cd "$TARGET"
 # not start a second suite -- the suite installs, and the install would run
 # the suite, without end.
 if [ -n "${PYTEST_CURRENT_TEST:-}" ]; then
-  echo "docket: OK -- checks ran clean; suite skipped (already inside a test run)."
+  echo "docket: OK -- checks ran clean$CLOSURE_NOTE; suite skipped (already inside a test run)."
 elif "$PY" -m pytest --version >/dev/null 2>&1; then
   # Say this BEFORE the silence starts. The suite spawns a git repository per
-  # case and takes minutes, most of them on Windows -- and a long quiet step
-  # is indistinguishable from a hung one, which is how a healthy process gets
-  # killed and restarted on top of itself.
+  # case, which is slow where git subprocesses are expensive (Windows) -- and
+  # a long quiet step is indistinguishable from a hung one, which is how a
+  # healthy process gets killed and restarted on top of itself.
   echo "docket: running the fixture suite that arms these checks. It builds a"
-  echo "docket:   scratch git repo per case: ~4s on Linux/macOS, ~14min on"
-  echo "docket:   Windows, where git subprocesses are far more expensive."
+  echo "docket:   scratch git repo per case: a few seconds on Linux/macOS, and"
+  echo "docket:   about a minute on a Windows 11 machine, where git subprocesses"
+  echo "docket:   are far more expensive. Be patient; it is not hung."
   "$PY" -m pytest tests/test_checks.py -q
-  echo "docket: OK -- checks ran clean and the fixture suite passed."
+  echo "docket: OK -- checks ran clean$CLOSURE_NOTE and the fixture suite passed."
 else
   echo "docket: NOTICE -- fixture suite NOT RUN (pytest is not installed here)."
   echo "docket:          the checks above DID run and are clean; the suite that"
   echo "docket:          arms them has not been executed on this machine. Run:"
   echo "docket:              $PY -m pip install pytest && $PY -m pytest tests/test_checks.py"
-  echo "docket: OK -- checks ran clean; suite pending (see NOTICE above)."
+  echo "docket: OK -- checks ran clean$CLOSURE_NOTE; suite pending (see NOTICE above)."
 fi
