@@ -107,16 +107,16 @@ docket: running the fixture suite that arms these checks. It builds a
 docket:   scratch git repo per case: a few seconds on Linux/macOS, and
 docket:   noticeably longer on Windows, where git subprocesses are far
 docket:   more expensive. Be patient; it is not hung.
-..............................ssssssssssssssssssssssssssssssssssssssssss [ 79%]
-ss.................                                                      [100%]
-47 passed, 44 skipped in 44.81s
+..............................ssssssssssssssssssssssssssssssssssssssssss [ 77%]
+ssss.................                                                    [100%]
+47 passed, 46 skipped in 26.01s
 docket: OK -- checks ran clean and the fixture suite passed.
 ```
 
 Into a repository whose current branch has **no commits yet**, the same install
 prints the notice below in place of the closure line and ends
 `docket: OK -- checks ran clean (closure check skipped: no commits yet) and the fixture suite passed.`
-(exit 0, `47 passed, 44 skipped`):
+(exit 0, `47 passed, 46 skipped`):
 
 ```text
 docket: NOTICE -- closure check SKIPPED: the current branch has no commits yet.
@@ -126,7 +126,7 @@ docket:          It runs in CI, and here once there is history to check.
 In a shallow clone (`git clone --depth 1`) the notice reads `this is a shallow
 clone, where commit reachability cannot be decided` instead.
 
-**The 44 skipped tests** are the tests of the installer and uninstaller
+**The 46 skipped tests** are the tests of the installer and uninstaller
 themselves. They need `templates/`, which is not copied into your project, so
 the installed suite skips them with a stated reason instead of failing. They run
 in the Docket clone's own suite.
@@ -134,8 +134,8 @@ in the Docket clone's own suite.
 **Windows cost.** The suite builds a scratch Git repository per case, and Git
 subprocesses are slow on Windows. Measured on a Windows 11 machine: the whole
 install took between 26 s and 58 s on repeated runs into a one-commit or empty repository. Docket's own
-91-test suite, which also runs the installer and uninstaller many times, took
-25 minutes in one run on a machine shared with other work (earlier, smaller
+93-test suite, which also runs the installer and uninstaller many times, took
+12 to 25 minutes in runs on a machine shared with other work (earlier, smaller
 versions took between 7 and 25 minutes); on Linux it takes seconds. Expect it to vary
 with antivirus and disk, and do not interrupt it. If pytest is not installed
 the installer says so and reports the suite as pending rather than passed.
@@ -266,8 +266,9 @@ docket:   checkout's files first would break commits, and removing the block dis
 docket:   pre-commit check for every checkout that uses that hook file. If you accept that:
 docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'
 docket:        through '# --- end docket-checks'. If one of those two marker lines is missing or
-docket:        was edited, delete the Docket lines that remain instead: the ones that run
-docket:        checks/check_duplicate_ids.py and the other installed checks/ scripts;
+docket:        was edited, delete every remaining Docket line instead: everything from where Docket's
+docket:        block started to where it ended, including any if/fi lines around it. If unsure,
+docket:        restore the hook to the content it had before the install;
 docket:     2. re-run: sh uninstall.sh --skip-hook /path/to/your-repo
 docket:   Otherwise leave Docket installed here.
 ```
@@ -304,8 +305,10 @@ docket:   The hook Git resolves for this repository is: /path/to/your-repo/.git/
 The same refusal covers a hook the script cannot cut, so it never removes `checks/`
 first and then fails: if you have deleted one of Docket's two marker lines, or edited
 both while the hook still runs Docket's `checks/` scripts, the uninstall refuses
-before touching anything (exit 2) and the manual step is the one above (delete the
-Docket lines that remain). Real output for a deleted end marker (first three lines):
+before touching anything (exit 2) and the manual step is the one above: delete
+every remaining Docket line (everything from where the block started to where it
+ended, including any `if`/`fi` around it), or restore the hook to what it was
+before the install. Real output for a deleted end marker (first three lines):
 
 ```text
 docket: REFUSING to uninstall -- nothing was changed.

@@ -9,11 +9,15 @@
 #     recorded at install time; a file you have changed is left in place, with
 #     a message (this includes DOCKET.md once you have added rows to it);
 #   * removes Docket's marked block from the pre-commit hook -- but only when
-#     that hook is this checkout's own: if core.hooksPath is set, the repository
-#     has linked worktrees, or the recorded hook is not the one Git resolves
-#     now, the whole uninstall is REFUSED (exit 2, nothing changed) with the
-#     manual steps; delete the block by hand, then re-run with --skip-hook, which
-#     is allowed only once no Docket block remains in the hook;
+#     that hook is this checkout's own and can be cut: if core.hooksPath is set,
+#     the repository has linked worktrees, the recorded hook is not the one Git
+#     resolves now, the hook carries a Docket block this checkout did not record
+#     writing, one of the block's two marker lines is missing, or both were edited
+#     while the hook still runs the installed checks/ scripts, the whole uninstall
+#     is REFUSED before any file is removed (exit 2, nothing changed) with the
+#     manual steps; delete the block by hand, then re-run (with --skip-hook where
+#     the reason is sharing), which is allowed only once no Docket block remains
+#     in the hook and it no longer runs the installed checks/ scripts;
 #   * removes Docket's stanza from .gitattributes only if it is still exactly
 #     what was installed (opening line, closing line and text, by hash); if it
 #     is not, the file is left untouched and you are told what to remove;
@@ -115,8 +119,9 @@ refuse() {   # refuse <headline>; prints the manual steps and exits 2
   echo "docket:   pre-commit check for every checkout that uses that hook file. If you accept that:"
   echo "docket:     1. open that hook file and delete the lines from '# --- docket-checks (installed by'"
   echo "docket:        through '# --- end docket-checks'. If one of those two marker lines is missing or"
-  echo "docket:        was edited, delete the Docket lines that remain instead: the ones that run"
-  echo "docket:        checks/check_duplicate_ids.py and the other installed checks/ scripts;"
+  echo "docket:        was edited, delete every remaining Docket line instead: everything from where Docket's"
+  echo "docket:        block started to where it ended, including any if/fi lines around it. If unsure,"
+  echo "docket:        restore the hook to the content it had before the install;"
   say "docket:     2. re-run: sh uninstall.sh --skip-hook $TARGET"
   echo "docket:   Otherwise leave Docket installed here."
   exit 2
