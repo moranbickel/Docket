@@ -31,6 +31,9 @@ From the parent of your Docket clone, using a POSIX shell (Git Bash on Windows):
 sh Docket/templates/install.sh /path/to/your-repo
 ```
 
+Step by step, with captured output, the Windows (PowerShell) form, and how to remove it:
+[install, first check, uninstall](examples/QUICKSTART.md). The target repository needs at least one commit.
+
 The installer adds checks, test fixtures, a CI workflow, a pre-commit hook, a
 starter ledger, and Git attributes. Read the [installer](templates/install.sh)
 first. It refuses differing check files and preserves an existing ledger; it
