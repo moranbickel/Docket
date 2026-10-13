@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 CHECKS = Path(__file__).parent.parent / "checks"
 FIX = Path(__file__).parent / "fixtures"
 
@@ -489,6 +491,13 @@ import shutil as _shutil
 REPO = Path(__file__).parent.parent
 INSTALLER = REPO / "templates" / "install.sh"
 
+# An adopter repo gets checks/ and tests/ but not templates/, so tests that run
+# the installer cannot run there. They skip with a reason instead of failing.
+_needs_installer = pytest.mark.skipif(
+    not INSTALLER.is_file(),
+    reason="templates/install.sh is not installed in an adopter repository; "
+           "this test exercises the installer itself")
+
 LEDGER_HEAD = ("| id | state | title | scope | owner | blocked-by | notes |\n"
                "|----|-------|-------|-------|-------|------------|-------|\n")
 
@@ -557,6 +566,7 @@ def _run_installer(installer: Path, target: Path):
         capture_output=True, text=True, encoding="utf-8")
 
 
+@_needs_installer
 def test_installed_workflow_paths_all_resolve(tmp_path):
     """THE control for the v0.1 quick-start defect.
 
@@ -590,6 +600,7 @@ def test_installed_workflow_paths_all_resolve(tmp_path):
     assert not absent, f"checks/ did not travel whole: {absent}"
 
 
+@_needs_installer
 def test_parity_control_fails_when_the_installer_drops_the_suite(tmp_path):
     """NEGATIVE CONTROL FOR test_installed_workflow_paths_all_resolve.
     DO NOT DELETE AS REDUNDANT.
@@ -627,6 +638,7 @@ def test_parity_control_fails_when_the_installer_drops_the_suite(tmp_path):
     assert any(p.startswith("tests/") for p in missing), missing
 
 
+@_needs_installer
 def test_installer_refuses_to_clobber_a_differing_file(tmp_path):
     """An adopter with their own checks/check_duplicate_ids.py is told, not
     silently overwritten."""
@@ -641,6 +653,7 @@ def test_installer_refuses_to_clobber_a_differing_file(tmp_path):
         encoding="utf-8") == "# mine, not yours\n"
 
 
+@_needs_installer
 def test_installing_twice_does_not_duplicate_the_gitattributes_rule(tmp_path):
     """Idempotence, and a real defect this caught.
 
@@ -667,6 +680,7 @@ def test_installing_twice_does_not_duplicate_the_gitattributes_rule(tmp_path):
     assert len(rules) == 1, f"ledger rule declared {len(rules)} times:\n{attrs}"
 
 
+@_needs_installer
 def test_installer_leaves_an_existing_ledger_alone(tmp_path):
     """A repo that already keeps a docket must not have it replaced by the
     starter. Three sample rows overwriting live work would be the most
@@ -678,6 +692,95 @@ def test_installer_leaves_an_existing_ledger_alone(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert (target / "DOCKET.md").read_text(encoding="utf-8") == mine
     assert "left untouched" in r.stdout
+
+
+# ----------------------------------- installed copy and empty-repo behaviour
+
+@_needs_installer
+def test_installed_suite_passes_in_an_adopter_repo(tmp_path):
+    """The installed copy of the installer self-tests must not fail.
+
+    The installer copies checks/ and tests/ but not templates/, and five tests
+    in this file exercise templates/install.sh itself. In an adopter repo they
+    used to fail with "No such file or directory", so the installer's own
+    final step exited 1 and never printed its OK line.
+
+    Protects: the adopter's first run of the installed suite. Without it, the
+    five installer tests could regress to failing in an adopter repo while
+    every other test here stays green, because this repository always has
+    templates/ and so never sees the failure. The nested installer run inside
+    pytest skips the suite step by design, so the suite is run here directly."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "an adopter repo\n"})
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (target / "templates").exists()  # the premise: no templates/
+
+    suite = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_checks.py", "-q", "-rs",
+         "-p", "no:cacheprovider", f"--basetemp={(tmp_path / 'pt').as_posix()}",
+         "-k", "installer or installed or installing or parity"],
+        cwd=target, capture_output=True, text=True, encoding="utf-8")
+    out = suite.stdout + suite.stderr
+    assert suite.returncode == 0, out
+    skipped = _re.search(r"(\d+) skipped", out)
+    # Non-vacuity: five installer tests must have been selected and skipped
+    # (with a reason naming templates/), not silently deselected.
+    assert skipped and int(skipped.group(1)) >= 5, out
+    assert "templates" in out, out
+
+
+@_needs_installer
+def test_installer_tests_are_not_skipped_in_the_source_tree():
+    """NEGATIVE CONTROL FOR the skip-when-templates-is-absent marker.
+    DO NOT DELETE AS REDUNDANT.
+
+    Protects: the five installer tests in Docket's own repository. Without it,
+    a mistake in the skip condition would turn those tests off here too and the
+    suite would stay green, with nobody having run them."""
+    assert INSTALLER.is_file(), "templates/install.sh missing in the source tree"
+    assert not _needs_installer.args[0], "skip condition is true in the source tree"
+
+
+@_needs_installer
+def test_installer_on_a_repo_with_no_commits_installs_fully(tmp_path):
+    """A target with no commits is a complete install, not a half-install.
+
+    The closure check reads HEAD, so with no commit it used to stop the
+    installer with "--head HEAD does not resolve" and exit non-zero, after the
+    files were already written. The check is post-install verification only,
+    so it is now skipped with a stated reason.
+
+    Protects: an adopter who runs `git init` and then the installer. Without
+    it, that path regresses to a non-zero exit with files written and the
+    suite never reached; no other test installs into a repo with no HEAD."""
+    target = _init_repo(tmp_path / "adopter")  # no commit
+    r = _run_installer(INSTALLER, target)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert "ERROR" not in out, out
+    assert "no commits" in out and "closure" in out.lower(), out
+    for rel in ("checks/check_duplicate_ids.py", "tests/test_checks.py",
+                "DOCKET.md", ".github/workflows/ledger-ci.yml", ".gitattributes"):
+        assert (target / rel).is_file(), f"{rel} missing after install"
+    hook = _g(target, "rev-parse", "--git-path", "hooks/pre-commit").stdout.strip()
+    assert "docket-checks" in (target / hook).read_text(encoding="utf-8")
+
+
+@_needs_installer
+def test_installer_still_runs_the_closure_check_when_a_commit_exists(tmp_path):
+    """NEGATIVE CONTROL FOR the no-commits skip. DO NOT DELETE AS REDUNDANT.
+
+    Protects: the closure-reference verification for every normal adopter.
+    Without it, an over-broad skip (always skipping the check) would pass the
+    no-commits test above, and an installed ledger would never be checked at
+    install time, silently."""
+    target = _init_repo(tmp_path / "adopter")
+    _commit(target, "initial", {"README.md": "an adopter repo\n"})
+    r = _run_installer(INSTALLER, target)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[closure-refs] PASS" in r.stdout, r.stdout
+    assert "no commits" not in r.stdout
 
 
 # ------------------------------------------- state transitions over a range
